@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+
+    <!-- Tema Base de la Aplicación -->
+    <style name="Theme.TendeSeguro20" parent="android:Theme.Material.Light.NoActionBar" />
+
+    <!-- Tema para la SplashScreen API Nativa (Android 12+) -->
+    <style name="Theme.TendeSeguro20.Splash" parent="Theme.SplashScreen">
+        <!-- Color de fondo de la Splash Screen -->
+        <item name="windowSplashScreenBackground">@color/splash_background</item>
+        <!-- Icono/Logo de la Splash Screen -->
+        <item name="windowSplashScreenAnimatedIcon">@drawable/ic_splash_logo</item>
+        <!-- Tema al que cambiar automáticamente una vez finalizada la Splash Screen -->
+        <item name="postSplashScreenTheme">@style/Theme.TendeSeguro20</item>
+    </style>
+
+</resources>

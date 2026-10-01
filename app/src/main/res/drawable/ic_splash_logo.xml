@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="120dp"
+    android:height="120dp"
+    android:viewportWidth="120"
+    android:viewportHeight="120">
+
+    <!-- Círculo de fondo Suave Pastel -->
+    <path
+        android:fillColor="#EBF3FE"
+        android:pathData="M60,60m-54,0a54,54 0,1 1,108 0a54,54 0,1 1,-108 0" />
+
+    <!-- Icono de Nube IoT -->
+    <path
+        android:fillColor="#4A90E2"
+        android:pathData="M78,54c0,-11.05 -8.95,-20 -20,-20c-8.84,0 -16.32,5.73 -18.98,13.68C36.84,48.24 35,51.89 35,56c0,7.18 5.82,13 13,13h30c7.18,0 13,-5.82 13,-13c0,-6.34 -4.54,-11.62 -10.6,-12.78z" />
+
+    <!-- Gota de Humedad/Agua -->
+    <path
+        android:fillColor="#2ECC71"
+        android:pathData="M60,70c-4.42,0 -8,3.58 -8,8c0,5.5 8,13 8,13s8,-7.5 8,-13c0,-4.42 -3.58,-8 -8,-8z" />
+
+    <!-- Escudo / Protección IoT -->
+    <path
+        android:fillColor="#E67E22"
+        android:pathData="M60,32l12,5.33V48c0,7.38 -5.12,14.28 -12,16c-6.88,-1.72 -12,-8.62 -12,-16V37.33L60,32z"
+        android:strokeAlpha="0.8" />
+</vector>
