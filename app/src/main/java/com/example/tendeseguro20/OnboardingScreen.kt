@@ -1,7 +1,11 @@
 package com.example.tendeseguro20
 
 import android.Manifest
+import android.content.Intent
+import android.content.pm.PackageManager
+import android.net.Uri
 import android.os.Build
+import android.provider.Settings
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
@@ -21,11 +25,12 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Notifications
+import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
@@ -45,11 +50,13 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.core.content.ContextCompat
 import com.example.tendeseguro20.ui.theme.TendeSeguro20Theme
 import kotlinx.coroutines.launch
 
@@ -59,11 +66,11 @@ import kotlinx.coroutines.launch
 
 private object OnboardingPastel {
     val Background = Color(0xFFFBF9F5)
-    val PrimaryText = Color(0xFF2C3E50)
-    val SecondaryText = Color(0xFF7F8C8D)
-    val AccentBlue = Color(0xFF4A90E2)
-    val AccentGreen = Color(0xFF7BCD9B)
-    val AccentOrange = Color(0xFFE67E22)
+    val PrimaryText = Color(0xFF1E293B)
+    val SecondaryText = Color(0xFF475569)
+    val AccentBlue = Color(0xFF1D4ED8)
+    val AccentGreen = Color(0xFF15803D)
+    val AccentOrange = Color(0xFFC2410C)
     val CardBackgroundPage1 = Color(0xFFEBF3FE)
     val CardBackgroundPage2 = Color(0xFFEBF8F2)
     val CardBackgroundPage3 = Color(0xFFFFF3EC)
@@ -71,10 +78,6 @@ private object OnboardingPastel {
     val BorderPage2 = Color(0xFFC7EFE0)
     val BorderPage3 = Color(0xFFFFE0D1)
 }
-
-// ============================================================================
-// MODELO DE DATOS DE PÁGINAS DE ONBOARDING
-// ============================================================================
 
 data class OnboardingPageData(
     val title: String,
@@ -86,7 +89,7 @@ data class OnboardingPageData(
 )
 
 // ============================================================================
-// COMPOSABLE PRINCIPAL: OnboardingScreen
+// COMPOSABLE PRINCIPAL CON SOLICITUD MÚLTIPLE DE PERMISOS REALES
 // ============================================================================
 
 @Composable
@@ -94,17 +97,29 @@ fun OnboardingScreen(
     onOnboardingFinished: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    val context = LocalContext.current
     val pagerState = rememberPagerState(pageCount = { 3 })
     val coroutineScope = rememberCoroutineScope()
 
-    // Estado para registrar si los permisos han sido otorgados
-    var permissionsGranted by remember { mutableStateOf(false) }
+    // Consulta en tiempo real de los permisos de Notificaciones y Ubicación
+    var arePermissionsGranted by remember {
+        mutableStateOf(
+            checkRealPermissions(context),
+        )
+    }
 
-    // Launcher para solicitud múltiple de permisos críticos
-    val permissionLauncher = rememberLauncherForActivityResult(
+    var showRationaleDialog by remember { mutableStateOf(false) }
+    var showSettingsRedirectDialog by remember { mutableStateOf(false) }
+
+    // LANZADOR REAL MÚLTIPLE DE PERMISOS CON ACTIVITY RESULT CONTRACT
+    val multiplePermissionsLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestMultiplePermissions(),
-    ) { resultMap ->
-        permissionsGranted = resultMap.values.all { it }
+    ) { permissionsResultMap ->
+        val allGranted = permissionsResultMap.values.all { it }
+        arePermissionsGranted = allGranted
+        if (!allGranted) {
+            showRationaleDialog = true
+        }
     }
 
     val pages = listOf(
@@ -123,8 +138,8 @@ fun OnboardingScreen(
             borderColor = OnboardingPastel.BorderPage2,
         ),
         OnboardingPageData(
-            title = "Detección BX5 y Notificaciones",
-            description = "Para avisarte en tiempo real de alertas de lluvia y enlazar tus módulos de agua BX5, solicitamos permisos de notificaciones y ubicación.",
+            title = "Permisos de Notificación y Ubicación",
+            description = "Para enviarte alertas inmediatas ante lluvia inminente y localizar estaciones meteorológicas locales, requerimos permisos de notificaciones y ubicación.",
             iconEmoji = "🌊 🔔",
             backgroundColor = OnboardingPastel.CardBackgroundPage3,
             borderColor = OnboardingPastel.BorderPage3,
@@ -143,7 +158,6 @@ fun OnboardingScreen(
             verticalArrangement = Arrangement.SpaceBetween,
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
-            // Header: Botón Saltar
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.End,
@@ -162,7 +176,6 @@ fun OnboardingScreen(
                 }
             }
 
-            // Contenido Deslizable (Pager)
             HorizontalPager(
                 state = pagerState,
                 modifier = Modifier
@@ -171,8 +184,8 @@ fun OnboardingScreen(
             ) { pageIndex ->
                 OnboardingPageView(
                     page = pages[pageIndex],
-                    permissionsGranted = permissionsGranted,
-                    onRequestPermissions = {
+                    isPermissionGranted = arePermissionsGranted,
+                    onRequestPermission = {
                         val permissionsToRequest = mutableListOf(
                             Manifest.permission.ACCESS_FINE_LOCATION,
                             Manifest.permission.ACCESS_COARSE_LOCATION,
@@ -180,23 +193,24 @@ fun OnboardingScreen(
                         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
                             permissionsToRequest.add(Manifest.permission.POST_NOTIFICATIONS)
                         }
-                        permissionLauncher.launch(permissionsToRequest.toTypedArray())
+                        // Lanza el diálogo nativo del sistema operativo Android
+                        multiplePermissionsLauncher.launch(permissionsToRequest.toTypedArray())
+                    },
+                    onOpenSettings = {
+                        showSettingsRedirectDialog = true
                     },
                 )
             }
 
-            // Footer: Indicadores de página y Botones de navegación
             Column(
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.spacedBy(20.dp),
             ) {
-                // Indicador de Puntos (Page Indicator)
                 PagerIndicator(
                     pageCount = pages.size,
                     currentPage = pagerState.currentPage,
                 )
 
-                // Botones Siguiente / Empezar
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,
@@ -209,7 +223,7 @@ fun OnboardingScreen(
                                     pagerState.animateScrollToPage(pagerState.currentPage - 1)
                                 }
                             },
-                            shape = RoundedCornerShape(16.dp),
+                            shape = PastelDesignSystem.ShapeButton,
                             colors = ButtonDefaults.outlinedButtonColors(
                                 contentColor = OnboardingPastel.PrimaryText,
                             ),
@@ -230,7 +244,7 @@ fun OnboardingScreen(
                                 onOnboardingFinished()
                             }
                         },
-                        shape = RoundedCornerShape(16.dp),
+                        shape = PastelDesignSystem.ShapeButton,
                         colors = ButtonDefaults.buttonColors(
                             containerColor = OnboardingPastel.AccentBlue,
                             contentColor = Color.White,
@@ -253,17 +267,129 @@ fun OnboardingScreen(
             }
         }
     }
+
+    // DIÁLOGO EXPLICATIVO DE PERMISOS (RATIONALE DIALOG)
+    if (showRationaleDialog) {
+        AlertDialog(
+            onDismissRequest = { showRationaleDialog = false },
+            title = {
+                Text(
+                    text = "Permisos Necesarios para TendeSeguro",
+                    fontSize = 18.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = OnboardingPastel.PrimaryText,
+                )
+            },
+            text = {
+                Text(
+                    text = "Los permisos de notificaciones y ubicación son indispensables para avisarte al instante cuando la humedad alcance el nivel de lluvia y consultar datos del clima local.",
+                    fontSize = 13.sp,
+                    color = OnboardingPastel.SecondaryText,
+                    lineHeight = 18.sp,
+                )
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        showRationaleDialog = false
+                        val permissionsToRequest = mutableListOf(
+                            Manifest.permission.ACCESS_FINE_LOCATION,
+                            Manifest.permission.ACCESS_COARSE_LOCATION,
+                        )
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                            permissionsToRequest.add(Manifest.permission.POST_NOTIFICATIONS)
+                        }
+                        multiplePermissionsLauncher.launch(permissionsToRequest.toTypedArray())
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = OnboardingPastel.AccentBlue),
+                ) {
+                    Text("Reintentar Solicitud", fontWeight = FontWeight.Bold)
+                }
+            },
+            dismissButton = {
+                OutlinedButton(onClick = { showRationaleDialog = false }) {
+                    Text("Continuar sin Permisos")
+                }
+            },
+            shape = PastelDesignSystem.ShapeSensorCard,
+            containerColor = OnboardingPastel.Background,
+        )
+    }
+
+    // DIÁLOGO DE REDIRECCIÓN A AJUSTES DE ANDROID
+    if (showSettingsRedirectDialog) {
+        AlertDialog(
+            onDismissRequest = { showSettingsRedirectDialog = false },
+            title = {
+                Text(
+                    text = "Habilitar Permisos en Ajustes",
+                    fontSize = 18.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = OnboardingPastel.PrimaryText,
+                )
+            },
+            text = {
+                Text(
+                    text = "Si rechazaste los permisos con la opción 'No volver a preguntar', por favor actívalos manualmente en los ajustes del sistema.",
+                    fontSize = 13.sp,
+                    color = OnboardingPastel.SecondaryText,
+                )
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        showSettingsRedirectDialog = false
+                        val intent = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
+                            data = Uri.fromParts("package", context.packageName, null)
+                        }
+                        context.startActivity(intent)
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = OnboardingPastel.AccentOrange),
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Settings,
+                        contentDescription = null,
+                        modifier = Modifier.size(16.dp),
+                    )
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text("Abrir Ajustes de Android", fontWeight = FontWeight.Bold)
+                }
+            },
+            dismissButton = {
+                OutlinedButton(onClick = { showSettingsRedirectDialog = false }) {
+                    Text("Cancelar")
+                }
+            },
+            shape = PastelDesignSystem.ShapeSensorCard,
+            containerColor = OnboardingPastel.Background,
+        )
+    }
 }
 
-// ============================================================================
-// VISTA INDIVIDUAL DE CADA PÁGINA
-// ============================================================================
+private fun checkRealPermissions(context: android.content.Context): Boolean {
+    val fineLocation = ContextCompat.checkSelfPermission(
+        context,
+        Manifest.permission.ACCESS_FINE_LOCATION,
+    ) == PackageManager.PERMISSION_GRANTED
+
+    val notifications = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+        ContextCompat.checkSelfPermission(
+            context,
+            Manifest.permission.POST_NOTIFICATIONS,
+        ) == PackageManager.PERMISSION_GRANTED
+    } else {
+        true
+    }
+
+    return fineLocation && notifications
+}
 
 @Composable
 private fun OnboardingPageView(
     page: OnboardingPageData,
-    permissionsGranted: Boolean,
-    onRequestPermissions: () -> Unit,
+    isPermissionGranted: Boolean,
+    onRequestPermission: () -> Unit,
+    onOpenSettings: () -> Unit,
 ) {
     Column(
         modifier = Modifier
@@ -275,17 +401,16 @@ private fun OnboardingPageView(
         Card(
             modifier = Modifier
                 .fillMaxWidth()
-                .clip(RoundedCornerShape(28.dp))
-                .border(1.5.dp, page.borderColor, RoundedCornerShape(28.dp)),
-            shape = RoundedCornerShape(28.dp),
+                .clip(PastelDesignSystem.ShapeHeroCard)
+                .border(1.5.dp, page.borderColor, PastelDesignSystem.ShapeHeroCard),
+            shape = PastelDesignSystem.ShapeHeroCard,
             colors = CardDefaults.cardColors(containerColor = page.backgroundColor),
-            elevation = CardDefaults.cardElevation(defaultElevation = 4.dp),
+            elevation = CardDefaults.cardElevation(defaultElevation = 3.dp),
         ) {
             Column(
                 modifier = Modifier.padding(28.dp),
                 horizontalAlignment = Alignment.CenterHorizontally,
             ) {
-                // Emoji / Icono destacado
                 Box(
                     modifier = Modifier
                         .size(90.dp)
@@ -319,38 +444,49 @@ private fun OnboardingPageView(
                     lineHeight = 20.sp,
                 )
 
-                // Panel contextual de solicitud de permisos (Sólamente en la vista 3)
                 if (page.isPermissionPage) {
                     Spacer(modifier = Modifier.height(20.dp))
 
-                    AnimatedVisibility(visible = !permissionsGranted) {
-                        Button(
-                            onClick = onRequestPermissions,
-                            shape = RoundedCornerShape(16.dp),
-                            colors = ButtonDefaults.buttonColors(
-                                containerColor = OnboardingPastel.AccentOrange,
-                                contentColor = Color.White,
-                            ),
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.Notifications,
-                                contentDescription = null,
-                                modifier = Modifier.size(18.dp),
-                            )
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Text(
-                                text = "Conceder Permisos",
-                                fontSize = 13.sp,
-                                fontWeight = FontWeight.Bold,
-                            )
+                    AnimatedVisibility(visible = !isPermissionGranted) {
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            Button(
+                                onClick = onRequestPermission,
+                                shape = PastelDesignSystem.ShapeButton,
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = OnboardingPastel.AccentOrange,
+                                    contentColor = Color.White,
+                                ),
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Notifications,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(18.dp),
+                                )
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text(
+                                    text = "Conceder Permisos Nativos",
+                                    fontSize = 13.sp,
+                                    fontWeight = FontWeight.Bold,
+                                )
+                            }
+
+                            Spacer(modifier = Modifier.height(6.dp))
+
+                            TextButton(onClick = onOpenSettings) {
+                                Text(
+                                    text = "Configurar en Ajustes del Sistema",
+                                    fontSize = 11.sp,
+                                    color = OnboardingPastel.SecondaryText,
+                                )
+                            }
                         }
                     }
 
-                    AnimatedVisibility(visible = permissionsGranted) {
+                    AnimatedVisibility(visible = isPermissionGranted) {
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
                             modifier = Modifier
-                                .clip(RoundedCornerShape(12.dp))
+                                .clip(PastelDesignSystem.ShapeBadge)
                                 .background(OnboardingPastel.AccentGreen.copy(alpha = 0.2f))
                                 .padding(horizontal = 12.dp, vertical = 8.dp),
                         ) {
@@ -362,7 +498,7 @@ private fun OnboardingPageView(
                             )
                             Spacer(modifier = Modifier.width(6.dp))
                             Text(
-                                text = "Permisos concedidos correctamente",
+                                text = "Permisos de notificaciones y clima concedidos",
                                 fontSize = 12.sp,
                                 fontWeight = FontWeight.SemiBold,
                                 color = OnboardingPastel.PrimaryText,
@@ -374,10 +510,6 @@ private fun OnboardingPageView(
         }
     }
 }
-
-// ============================================================================
-// INDICADOR DE PÁGINAS (PAGER INDICATOR)
-// ============================================================================
 
 @Composable
 private fun PagerIndicator(
@@ -402,17 +534,5 @@ private fun PagerIndicator(
                     ),
             )
         }
-    }
-}
-
-// ============================================================================
-// PREVIEW
-// ============================================================================
-
-@Preview(showBackground = true, showSystemUi = true)
-@Composable
-fun OnboardingScreenPreview() {
-    TendeSeguro20Theme {
-        OnboardingScreen(onOnboardingFinished = {})
     }
 }

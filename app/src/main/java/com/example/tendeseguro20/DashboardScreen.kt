@@ -4,6 +4,7 @@ import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
@@ -12,6 +13,8 @@ import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -24,7 +27,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -42,10 +44,15 @@ import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.LinearProgressIndicator
-import androidx.compose.material3.Surface
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Snackbar
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -56,6 +63,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.tooling.preview.Preview
@@ -64,11 +74,28 @@ import androidx.compose.ui.unit.sp
 import com.example.tendeseguro20.ui.theme.TendeSeguro20Theme
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
-import java.text.SimpleDateFormat
-import java.util.Date
-import java.util.Locale
 import kotlin.math.roundToInt
-import kotlin.random.Random
+
+// ============================================================================
+// MICROINTERACCIÓN DE ESCALA REUTILIZABLE
+// ============================================================================
+
+@Composable
+fun Modifier.pressScaleEffectDashboard(interactionSource: MutableInteractionSource): Modifier {
+    val isPressed by interactionSource.collectIsPressedAsState()
+    val scale by animateFloatAsState(
+        targetValue = if (isPressed) 0.96f else 1.0f,
+        animationSpec = spring(
+            dampingRatio = Spring.DampingRatioMediumBouncy,
+            stiffness = Spring.StiffnessLow,
+        ),
+        label = "DashboardPressScaleAnimation",
+    )
+    return this.graphicsLayer {
+        scaleX = scale
+        scaleY = scale
+    }
+}
 
 // ============================================================================
 // ESTADO GENERAL DE DASHBOARD
@@ -86,101 +113,146 @@ data class DashboardState(
         TemperatureReading("02:00 PM", 25.1f),
         TemperatureReading("04:00 PM", 24.5f),
     ),
-    val lastUpdated: String = "Justo ahora",
+    val lastUpdated: String = "Justo ahora (En Caché)",
 )
 
 // ============================================================================
-// PALETA VISUAL PASTEL
-// ============================================================================
-
-private object DashboardPastel {
-    val Background = Color(0xFFFAF8F5)
-    val TextPrimary = Color(0xFF2C3E50)
-    val TextSecondary = Color(0xFF7F8C8D)
-
-    val TempCardBackground = Color(0xFFEBF3FE)
-    val TempCardBorder = Color(0xFFD0E2FF)
-    val TempAccent = Color(0xFF4A90E2)
-
-    val HumidCardBackground = Color(0xFFEBF8F2)
-    val HumidCardBorder = Color(0xFFC7EFE0)
-
-    val WaterCardBackground = Color(0xFFFFF3EC)
-    val WaterCardBorder = Color(0xFFFFE0D1)
-    val WaterAccent = Color(0xFFE67E22)
-
-    val HeroSafeBackground = Color(0xFFEAFAF1)
-    val HeroSafeBorder = Color(0xFFA2E8DD)
-    val HeroWarningBackground = Color(0xFFFFF0ED)
-    val HeroWarningBorder = Color(0xFFFFC4B8)
-
-    val TrafficGreen = Color(0xFF7BCD9B)
-    val TrafficYellow = Color(0xFFFFD166)
-    val TrafficRed = Color(0xFFEF476F)
-}
-
-// ============================================================================
-// COMPOSABLE PRINCIPAL: DashboardScreen CON CrucialStateContainer
+// COMPOSABLE PRINCIPAL: DashboardScreen (DATOS ESTÁTICOS AL NAVEGAR)
 // ============================================================================
 
 @Composable
 fun DashboardScreen(
     modifier: Modifier = Modifier,
     onSettingsClick: (() -> Unit)? = null,
+    onSensorDetailClick: ((SensorType) -> Unit)? = null,
 ) {
-    var uiState by remember { mutableStateOf<AppUiState<DashboardState>>(AppUiState.Loading()) }
-    val coroutineScope = rememberCoroutineScope()
+    // Suscripción reactiva al Single Source of Truth en memoria del repositorio
+    val sensorsList by IotSensorRepository.sensorsFlow.collectAsState()
 
+    val tempSensor = sensorsList.find { it.type == SensorType.TEMPERATURE }
+    val humidSensor = sensorsList.find { it.type == SensorType.HUMIDITY }
+    val waterSensor = sensorsList.find { it.type == SensorType.WATER_BX5 }
+
+    // Inicialización ESTÁTICA en estado de éxito con los últimos datos en memoria
+    var uiState by remember {
+        mutableStateOf<AppUiState<DashboardState>>(
+            AppUiState.Success(
+                DashboardState(
+                    temperature = tempSensor?.currentValue ?: 24.5f,
+                    humidity = (humidSensor?.currentValue ?: 82f).roundToInt(),
+                    waterLevelPercent = (waterSensor?.currentValue ?: 45f).roundToInt(),
+                    lastUpdated = tempSensor?.lastUpdated ?: "Justo ahora",
+                )
+            )
+        )
+    }
+
+    var isOffline by remember { mutableStateOf(false) }
+
+    val coroutineScope = rememberCoroutineScope()
+    val snackbarHostState = remember { SnackbarHostState() }
+
+    fun showFeedbackSnackbar(msg: String) {
+        coroutineScope.launch {
+            snackbarHostState.currentSnackbarData?.dismiss()
+            snackbarHostState.showSnackbar(msg)
+        }
+    }
+
+    /**
+     * ACCIÓN MANUAL EXCLUSIVA: Se ejecuta ÚNICAMENTE cuando el usuario presiona el botón "Actualizar".
+     * NO existe ningún LaunchedEffect(Unit) que recargue datos automáticamente al navegar o cambiar de pestaña.
+     */
     fun fetchDashboardData() {
         coroutineScope.launch {
+            if (isOffline) {
+                showFeedbackSnackbar("Estás sin conexión. Mostrando datos cargados en caché 📡")
+                return@launch
+            }
+
             uiState = AppUiState.Loading("Conectando con sensor ESP32...")
-            delay(800)
-            val rawTemp = Random.nextFloat() * 14f + 18f
-            val newTemp = (rawTemp * 10f).roundToInt() / 10.0f
-            val newHumid = Random.nextInt(45, 96)
-            val newWater = Random.nextInt(10, 95)
-            val currentTime = SimpleDateFormat("hh:mm a", Locale.getDefault()).format(Date())
+            delay(600)
+
+            // Recalcula y actualiza la fuente de datos global en memoria exclusivamente bajo demanda del usuario
+            IotSensorRepository.refreshSensorReadings()
 
             uiState = AppUiState.Success(
                 DashboardState(
-                    temperature = newTemp,
-                    humidity = newHumid,
-                    waterLevelPercent = newWater,
-                    lastUpdated = currentTime,
+                    temperature = tempSensor?.currentValue ?: 24.5f,
+                    humidity = (humidSensor?.currentValue ?: 82f).roundToInt(),
+                    waterLevelPercent = (waterSensor?.currentValue ?: 45f).roundToInt(),
+                    lastUpdated = tempSensor?.lastUpdated ?: "Justo ahora",
+                )
+            )
+            showFeedbackSnackbar("Lecturas de sensores actualizadas manualmente 🔄")
+        }
+    }
+
+    // Sincronización reactiva del estado cuando cambia el repositorio global
+    LaunchedEffect(sensorsList) {
+        if (uiState is AppUiState.Success) {
+            uiState = AppUiState.Success(
+                DashboardState(
+                    temperature = tempSensor?.currentValue ?: 24.5f,
+                    humidity = (humidSensor?.currentValue ?: 82f).roundToInt(),
+                    waterLevelPercent = (waterSensor?.currentValue ?: 45f).roundToInt(),
+                    lastUpdated = tempSensor?.lastUpdated ?: "Justo ahora",
                 )
             )
         }
     }
 
-    LaunchedEffect(Unit) {
-        fetchDashboardData()
-    }
-
-    Surface(
+    Scaffold(
         modifier = modifier.fillMaxSize(),
-        color = DashboardPastel.Background,
-    ) {
+        snackbarHost = {
+            SnackbarHost(hostState = snackbarHostState) { snackbarData ->
+                Snackbar(
+                    snackbarData = snackbarData,
+                    containerColor = PastelDesignSystem.TextPrimary,
+                    contentColor = Color.White,
+                    shape = PastelDesignSystem.ShapeButton,
+                    modifier = Modifier.padding(16.dp),
+                )
+            }
+        },
+        containerColor = PastelDesignSystem.Background,
+    ) { innerPadding ->
         Column(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(horizontal = 20.dp, vertical = 20.dp)
+                .padding(innerPadding)
+                .padding(
+                    horizontal = PastelDesignSystem.ScreenPaddingHorizontal,
+                    vertical = PastelDesignSystem.ScreenPaddingVertical,
+                )
                 .verticalScroll(rememberScrollState()),
-            verticalArrangement = Arrangement.spacedBy(16.dp),
+            verticalArrangement = Arrangement.spacedBy(PastelDesignSystem.ElementSpacingMedium),
         ) {
-            // Header: Título de App y Botón Actualizar
+            // Header
             DashboardHeader(
-                lastUpdated = (uiState as? AppUiState.Success)?.data?.lastUpdated ?: "Cargando...",
+                lastUpdated = tempSensor?.lastUpdated ?: "Justo ahora",
+                isOffline = isOffline,
+                onToggleOffline = { isOffline = !isOffline },
                 onRefreshClick = { fetchDashboardData() },
                 onSettingsClick = onSettingsClick,
             )
 
-            // Selector de Prueba para Conmutar Dinámicamente los Estados Cruciales
+            // Banner Sutil Sin Conexión
+            AnimatedVisibility(
+                visible = isOffline,
+                enter = fadeIn() + expandVertically(),
+                exit = fadeOut() + shrinkVertically(),
+            ) {
+                OfflineBannerDashboard()
+            }
+
+            // Selector de Demostración
             StateTestSelector(
                 currentState = uiState,
-                onStateSelected = { selectedState -> uiState = selectedState }
+                onStateSelected = { selectedState -> uiState = selectedState },
             )
 
-            // CONTENEDOR REACTIVO PRINCIPAL DE ESTADOS CRUCIALES
+            // Contenedor de Estado Reactivo
             CrucialStateContainer(
                 state = uiState,
                 onRetry = { fetchDashboardData() },
@@ -188,19 +260,70 @@ fun DashboardScreen(
             ) { data ->
                 DashboardSuccessView(
                     initialData = data,
+                    tempSensor = tempSensor,
+                    humidSensor = humidSensor,
+                    waterSensor = waterSensor,
                     onStateChange = { updated ->
                         uiState = AppUiState.Success(updated)
-                    }
+                    },
+                    onShowSnackbar = { msg -> showFeedbackSnackbar(msg) },
+                    onSensorDetailClick = onSensorDetailClick,
                 )
             }
 
-            Spacer(modifier = Modifier.height(16.dp))
+            Spacer(modifier = Modifier.height(PastelDesignSystem.ElementSpacingMedium))
         }
     }
 }
 
 // ============================================================================
-// BARRA SELECTORA DE ESTADOS PARA DEMOSTRACIÓN/PRUEBA
+// BANNER SUTIL SIN CONEXIÓN
+// ============================================================================
+
+@Composable
+private fun OfflineBannerDashboard() {
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(PastelDesignSystem.ShapeBadge)
+            .background(PastelDesignSystem.AlertBackground)
+            .border(1.dp, PastelDesignSystem.AlertBorder, PastelDesignSystem.ShapeBadge)
+            .padding(14.dp)
+            .semantics(mergeDescendants = true) {
+                contentDescription = "Aviso de sin conexión activo. Mostrando datos guardados en la memoria caché local."
+            },
+    ) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.Center,
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            Icon(
+                imageVector = Icons.Default.Warning,
+                contentDescription = null,
+                tint = PastelDesignSystem.AlertRed,
+                modifier = Modifier.size(20.dp),
+            )
+            Spacer(modifier = Modifier.width(10.dp))
+            Column {
+                Text(
+                    text = "Estás sin conexión",
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = PastelDesignSystem.TextPrimary,
+                )
+                Text(
+                    text = "Mostrando los últimos datos cargados en caché local.",
+                    fontSize = 11.sp,
+                    color = PastelDesignSystem.TextSecondary,
+                )
+            }
+        }
+    }
+}
+
+// ============================================================================
+// BARRA SELECTORA DE ESTADOS
 // ============================================================================
 
 @Composable
@@ -211,9 +334,9 @@ private fun StateTestSelector(
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(12.dp))
+            .clip(PastelDesignSystem.ShapeBadge)
             .background(Color.White)
-            .border(1.dp, DashboardPastel.TempCardBorder, RoundedCornerShape(12.dp))
+            .border(1.dp, PastelDesignSystem.TempBorder, PastelDesignSystem.ShapeBadge)
             .padding(4.dp),
         horizontalArrangement = Arrangement.SpaceEvenly,
         verticalAlignment = Alignment.CenterVertically,
@@ -221,16 +344,12 @@ private fun StateTestSelector(
         StateChip(
             label = "Éxito",
             isSelected = currentState is AppUiState.Success,
-            onClick = {
-                onStateSelected(AppUiState.Success(DashboardState()))
-            }
+            onClick = { onStateSelected(AppUiState.Success(DashboardState())) },
         )
         StateChip(
             label = "Carga",
             isSelected = currentState is AppUiState.Loading,
-            onClick = {
-                onStateSelected(AppUiState.Loading("Conectando con sensor ESP32..."))
-            }
+            onClick = { onStateSelected(AppUiState.Loading("Conectando con sensor ESP32...")) },
         )
         StateChip(
             label = "Vacío",
@@ -240,10 +359,10 @@ private fun StateTestSelector(
                     AppUiState.Empty(
                         title = "Sin Datos de Sensores",
                         description = "Aún no has vinculado tu módulo de agua BX5 o no existen lecturas en la base de datos.",
-                        actionLabel = "Vincular Módulo BX5"
+                        actionLabel = "Vincular Módulo BX5",
                     )
                 )
-            }
+            },
         )
         StateChip(
             label = "Error ESP32",
@@ -251,11 +370,11 @@ private fun StateTestSelector(
             onClick = {
                 onStateSelected(
                     AppUiState.Error(
-                        userFriendlyMessage = "Pérdida de comunicación inalámbrica con el módulo ESP32. Comprueba que el dispositivo tenga alimentación.",
-                        canRetry = true
+                        userFriendlyMessage = "No pudimos conectar con el módulo ESP32. Verifica que el dispositivo tenga alimentación e intenta de nuevo.",
+                        canRetry = true,
                     )
                 )
-            }
+            },
         )
     }
 }
@@ -266,19 +385,25 @@ private fun StateChip(
     isSelected: Boolean,
     onClick: () -> Unit,
 ) {
+    val chipInteractionSource = remember { MutableInteractionSource() }
+
     Box(
         modifier = Modifier
-            .clip(RoundedCornerShape(8.dp))
-            .background(if (isSelected) DashboardPastel.TempAccent else Color.Transparent)
-            .clickable { onClick() }
-            .padding(horizontal = 10.dp, vertical = 6.dp),
+            .pressScaleEffectDashboard(chipInteractionSource)
+            .clip(PastelDesignSystem.ShapeBadge)
+            .background(if (isSelected) PastelDesignSystem.TempAccent else Color.Transparent)
+            .clickable(interactionSource = chipInteractionSource, indication = null) { onClick() }
+            .padding(horizontal = 10.dp, vertical = 6.dp)
+            .semantics {
+                contentDescription = "Estado de simulación $label. ${if (isSelected) "Seleccionado actualmente" else "Presiona para activar"}"
+            },
         contentAlignment = Alignment.Center,
     ) {
         Text(
             text = label,
             fontSize = 11.sp,
             fontWeight = FontWeight.Bold,
-            color = if (isSelected) Color.White else DashboardPastel.TextSecondary,
+            color = if (isSelected) Color.White else PastelDesignSystem.TextSecondary,
         )
     }
 }
@@ -290,132 +415,212 @@ private fun StateChip(
 @Composable
 private fun DashboardSuccessView(
     initialData: DashboardState,
+    tempSensor: IotSensorModel?,
+    humidSensor: IotSensorModel?,
+    waterSensor: IotSensorModel?,
     onStateChange: (DashboardState) -> Unit,
+    onShowSnackbar: (String) -> Unit,
+    onSensorDetailClick: ((SensorType) -> Unit)?,
 ) {
     var isTempExpanded by remember { mutableStateOf(false) }
     var isHumidExpanded by remember { mutableStateOf(false) }
     var isWaterExpanded by remember { mutableStateOf(false) }
 
-    Column(verticalArrangement = Arrangement.spacedBy(18.dp)) {
-        // ACCIÓN CENTRAL DEL USUARIO: Hero Banner de Control del Tendedero
+    val currentTemp = tempSensor?.currentValue ?: initialData.temperature
+    val currentHumid = (humidSensor?.currentValue ?: initialData.humidity.toFloat()).roundToInt()
+    val currentWater = (waterSensor?.currentValue ?: initialData.waterLevelPercent.toFloat()).roundToInt()
+
+    Column(verticalArrangement = Arrangement.spacedBy(PastelDesignSystem.ElementSpacingMedium)) {
+        // ACCIÓN CENTRAL HERO
         HeroActionCard(
-            humidity = initialData.humidity,
-            waterPercent = initialData.waterLevelPercent,
+            humidity = currentHumid,
+            waterPercent = currentWater,
             isProtected = initialData.isRackProtected,
             onToggleProtection = {
-                onStateChange(initialData.copy(isRackProtected = !initialData.isRackProtected))
+                val newProtectedState = !initialData.isRackProtected
+                onStateChange(initialData.copy(isRackProtected = newProtectedState))
+                onShowSnackbar(
+                    if (newProtectedState) "¡Tendedero protegido con éxito contra la lluvia! ☂️"
+                    else "Cubierta del tendedero replegada. Modo de secado activo ☀️",
+                )
             },
         )
 
         Text(
-            text = "Sensores en Tiempo Real",
-            fontSize = 16.sp,
+            text = "Sensores en Tiempo Real (Estado estático al navegar)",
+            fontSize = 14.sp,
             fontWeight = FontWeight.Bold,
-            color = DashboardPastel.TextPrimary,
+            color = PastelDesignSystem.TextPrimary,
             modifier = Modifier.padding(top = 4.dp),
         )
 
-        // 1. TARJETA INTERACTIVA DE TEMPERATURA
         TemperatureInteractiveCard(
-            temperature = initialData.temperature,
-            history = initialData.history,
+            temperature = currentTemp,
+            history = tempSensor?.history ?: initialData.history,
             isExpanded = isTempExpanded,
-            onCardClick = { isTempExpanded = !isTempExpanded },
+            onCardClick = {
+                if (onSensorDetailClick != null) {
+                    onSensorDetailClick(SensorType.TEMPERATURE)
+                } else {
+                    isTempExpanded = !isTempExpanded
+                    onShowSnackbar(if (isTempExpanded) "Histórico de temperatura desplegado 🌡️" else "Histórico contraído")
+                }
+            },
         )
 
-        // 2. TARJETA INTERACTIVA DE HUMEDAD (SEMÁFORO DE LLUVIA)
         HumidityInteractiveCard(
-            humidity = initialData.humidity,
+            humidity = currentHumid,
             isExpanded = isHumidExpanded,
-            onCardClick = { isHumidExpanded = !isHumidExpanded },
+            onCardClick = {
+                if (onSensorDetailClick != null) {
+                    onSensorDetailClick(SensorType.HUMIDITY)
+                } else {
+                    isHumidExpanded = !isHumidExpanded
+                    onShowSnackbar(if (isHumidExpanded) "Sistema de prevención de lluvia activo 💧" else "Alerta contraída")
+                }
+            },
         )
 
-        // 3. TARJETA INTERACTIVA DE NIVEL DE AGUA (SENSOR BX5)
         WaterLevelInteractiveCard(
-            waterPercent = initialData.waterLevelPercent,
+            waterPercent = currentWater,
             isExpanded = isWaterExpanded,
-            onCardClick = { isWaterExpanded = !isWaterExpanded },
+            onCardClick = {
+                if (onSensorDetailClick != null) {
+                    onSensorDetailClick(SensorType.WATER_BX5)
+                } else {
+                    isWaterExpanded = !isWaterExpanded
+                    onShowSnackbar(if (isWaterExpanded) "Módulo indicador de agua BX5 desplegado 🌊" else "Indicador BX5 contraído")
+                }
+            },
         )
     }
 }
 
 // ============================================================================
-// HEADER DE DASHBOARD
+// HEADER ACCESIBLE
 // ============================================================================
 
 @Composable
 private fun DashboardHeader(
     lastUpdated: String,
+    isOffline: Boolean,
+    onToggleOffline: () -> Unit,
     onRefreshClick: () -> Unit,
     onSettingsClick: (() -> Unit)?,
 ) {
-    Row(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.SpaceBetween,
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Column {
-            Text(
-                text = "TendeSeguro 2.0",
-                fontSize = 24.sp,
-                fontWeight = FontWeight.Bold,
-                color = DashboardPastel.TextPrimary,
-            )
-            Text(
-                text = "Panel de Monitoreo IoT",
-                fontSize = 13.sp,
-                color = DashboardPastel.TextSecondary,
-            )
-            Text(
-                text = "Actualizado: $lastUpdated",
-                fontSize = 10.sp,
-                color = DashboardPastel.TextSecondary.copy(alpha = 0.8f),
-            )
-        }
+    val refreshInteractionSource = remember { MutableInteractionSource() }
+    val profileInteractionSource = remember { MutableInteractionSource() }
 
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Button(
-                onClick = onRefreshClick,
-                shape = RoundedCornerShape(14.dp),
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = DashboardPastel.TempAccent,
-                    contentColor = Color.White,
-                ),
-                elevation = ButtonDefaults.buttonElevation(defaultElevation = 2.dp),
-            ) {
-                Icon(
-                    imageVector = Icons.Default.Refresh,
-                    contentDescription = "Actualizar sensores",
-                    modifier = Modifier.size(16.dp),
+    Column(verticalArrangement = Arrangement.spacedBy(PastelDesignSystem.ElementSpacingSmall)) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column {
+                Text(
+                    text = "TendeSeguro 2.0",
+                    fontSize = 24.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = PastelDesignSystem.TextPrimary,
                 )
-                Spacer(modifier = Modifier.width(6.dp))
-                Text(text = "Actualizar", fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                Text(
+                    text = "Panel de Monitoreo IoT",
+                    fontSize = 13.sp,
+                    color = PastelDesignSystem.TextSecondary,
+                )
+                Text(
+                    text = "Actualizado: $lastUpdated",
+                    fontSize = 10.sp,
+                    color = PastelDesignSystem.TextSecondary.copy(alpha = 0.8f),
+                )
             }
 
-            if (onSettingsClick != null) {
-                Spacer(modifier = Modifier.width(8.dp))
-                Box(
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                // BOTÓN ACTUALIZAR: Única acción que gatilla la recarga de datos
+                Button(
+                    onClick = onRefreshClick,
+                    interactionSource = refreshInteractionSource,
+                    shape = PastelDesignSystem.ShapeButton,
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = PastelDesignSystem.TempAccent,
+                        contentColor = Color.White,
+                    ),
+                    elevation = ButtonDefaults.buttonElevation(defaultElevation = 2.dp),
                     modifier = Modifier
-                        .size(38.dp)
-                        .clip(CircleShape)
-                        .background(DashboardPastel.TempCardBorder)
-                        .clickable { onSettingsClick() },
-                    contentAlignment = Alignment.Center,
+                        .pressScaleEffectDashboard(refreshInteractionSource)
+                        .semantics {
+                            contentDescription = "Presiona para actualizar manualmente las lecturas de los sensores"
+                        },
                 ) {
                     Icon(
-                        imageVector = Icons.Default.Person,
-                        contentDescription = "Perfil y Ajustes",
-                        tint = DashboardPastel.TempAccent,
-                        modifier = Modifier.size(20.dp),
+                        imageVector = Icons.Default.Refresh,
+                        contentDescription = null,
+                        modifier = Modifier.size(16.dp),
                     )
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text(text = "Actualizar", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                }
+
+                if (onSettingsClick != null) {
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Box(
+                        modifier = Modifier
+                            .pressScaleEffectDashboard(profileInteractionSource)
+                            .size(38.dp)
+                            .clip(PastelDesignSystem.ShapeCircle)
+                            .background(PastelDesignSystem.TempBorder)
+                            .clickable(interactionSource = profileInteractionSource, indication = null) { onSettingsClick() }
+                            .semantics {
+                                contentDescription = "Perfil del usuario y configuración de preferencias"
+                            },
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Person,
+                            contentDescription = null,
+                            tint = PastelDesignSystem.TempAccent,
+                            modifier = Modifier.size(20.dp),
+                        )
+                    }
                 }
             }
+        }
+
+        Row(
+            modifier = Modifier
+                .clip(PastelDesignSystem.ShapeBadge)
+                .background(Color.White)
+                .border(1.dp, PastelDesignSystem.TempBorder, PastelDesignSystem.ShapeBadge)
+                .clickable { onToggleOffline() }
+                .padding(horizontal = 8.dp, vertical = 4.dp)
+                .semantics {
+                    contentDescription = if (isOffline)
+                        "Modo sin conexión activo. Presiona para reconectar en línea."
+                    else
+                        "Modo en línea activo. Presiona para simular estado sin conexión."
+                },
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(8.dp)
+                    .clip(PastelDesignSystem.ShapeCircle)
+                    .background(if (isOffline) PastelDesignSystem.TrafficRed else PastelDesignSystem.TrafficGreen),
+            )
+            Spacer(modifier = Modifier.width(6.dp))
+            Text(
+                text = if (isOffline) "Modo: Sin Conexión (Click para Conectar)" else "Modo: En Línea (Click para Simular Offline)",
+                fontSize = 10.sp,
+                fontWeight = FontWeight.Bold,
+                color = PastelDesignSystem.TextSecondary,
+            )
         }
     }
 }
 
 // ============================================================================
-// ACCIÓN CENTRAL DEL USUARIO: HERO BANNER
+// ACCIÓN CENTRAL HERO
 // ============================================================================
 
 @Composable
@@ -425,22 +630,34 @@ private fun HeroActionCard(
     isProtected: Boolean,
     onToggleProtection: () -> Unit,
 ) {
+    val cardInteractionSource = remember { MutableInteractionSource() }
     val isRainRisk = humidity >= 80 || waterPercent >= 75
-    val cardBg = if (isRainRisk) DashboardPastel.HeroWarningBackground else DashboardPastel.HeroSafeBackground
-    val cardBorder = if (isRainRisk) DashboardPastel.HeroWarningBorder else DashboardPastel.HeroSafeBorder
+    val cardBg = if (isRainRisk) PastelDesignSystem.HeroWarningBackground else PastelDesignSystem.HeroSafeBackground
+    val cardBorder = if (isRainRisk) PastelDesignSystem.HeroWarningBorder else PastelDesignSystem.HeroSafeBorder
+
+    val talkBackHeroLabel = if (isProtected) {
+        "Estado actual: Tendedero protegido. Cubierta desplegada de forma segura."
+    } else if (isRainRisk) {
+        "Alerta de lluvia inminente con humedad del $humidity por ciento. Tendedero expuesto."
+    } else {
+        "Estado actual: Tendedero expuesto con condiciones estables para el secado."
+    }
 
     Card(
         modifier = Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(26.dp))
-            .border(1.5.dp, cardBorder, RoundedCornerShape(26.dp))
-            .animateContentSize(),
-        shape = RoundedCornerShape(26.dp),
+            .clip(PastelDesignSystem.ShapeHeroCard)
+            .border(1.5.dp, cardBorder, PastelDesignSystem.ShapeHeroCard)
+            .animateContentSize()
+            .semantics(mergeDescendants = true) {
+                contentDescription = talkBackHeroLabel
+            },
+        shape = PastelDesignSystem.ShapeHeroCard,
         colors = CardDefaults.cardColors(containerColor = cardBg),
         elevation = CardDefaults.cardElevation(defaultElevation = 3.dp),
     ) {
         Column(
-            modifier = Modifier.padding(22.dp),
+            modifier = Modifier.padding(PastelDesignSystem.CardPaddingHorizontal),
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
             Row(
@@ -452,8 +669,8 @@ private fun HeroActionCard(
                     Box(
                         modifier = Modifier
                             .size(48.dp)
-                            .clip(CircleShape)
-                            .background(if (isRainRisk) DashboardPastel.TrafficRed.copy(alpha = 0.2f) else DashboardPastel.TrafficGreen.copy(alpha = 0.2f)),
+                            .clip(PastelDesignSystem.ShapeCircle)
+                            .background(if (isRainRisk) PastelDesignSystem.TrafficRed.copy(alpha = 0.2f) else PastelDesignSystem.TrafficGreen.copy(alpha = 0.2f)),
                         contentAlignment = Alignment.Center,
                     ) {
                         Text(
@@ -467,12 +684,12 @@ private fun HeroActionCard(
                             text = if (isProtected) "Tendedero Protegido" else if (isRainRisk) "¡Alerta de Lluvia!" else "Tendedero Expuesto",
                             fontSize = 17.sp,
                             fontWeight = FontWeight.Bold,
-                            color = DashboardPastel.TextPrimary,
+                            color = PastelDesignSystem.TextPrimary,
                         )
                         Text(
                             text = if (isProtected) "Cubierta desplegada de forma segura" else if (isRainRisk) "Riesgo alto de lluvia ($humidity%)" else "Condiciones estables para secado",
                             fontSize = 12.sp,
-                            color = DashboardPastel.TextSecondary,
+                            color = PastelDesignSystem.TextSecondary,
                         )
                     }
                 }
@@ -480,36 +697,72 @@ private fun HeroActionCard(
 
             Spacer(modifier = Modifier.height(18.dp))
 
-            Button(
-                onClick = onToggleProtection,
-                shape = RoundedCornerShape(18.dp),
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = if (isProtected) DashboardPastel.TrafficGreen else if (isRainRisk) DashboardPastel.TrafficRed else DashboardPastel.TempAccent,
-                    contentColor = Color.White,
-                ),
-                elevation = ButtonDefaults.buttonElevation(defaultElevation = 3.dp),
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(50.dp),
-            ) {
-                Icon(
-                    imageVector = if (isProtected) Icons.Default.CheckCircle else Icons.Default.Warning,
-                    contentDescription = null,
-                    modifier = Modifier.size(20.dp),
-                )
-                Spacer(modifier = Modifier.width(10.dp))
-                Text(
-                    text = if (isProtected) "Desplegar Tendedero" else "Proteger Tendedero Ahora",
-                    fontSize = 15.sp,
-                    fontWeight = FontWeight.Bold,
-                )
+            if (isProtected) {
+                OutlinedButton(
+                    onClick = onToggleProtection,
+                    interactionSource = cardInteractionSource,
+                    shape = PastelDesignSystem.ShapeButton,
+                    colors = ButtonDefaults.outlinedButtonColors(
+                        contentColor = PastelDesignSystem.TextPrimary,
+                    ),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(50.dp)
+                        .pressScaleEffectDashboard(cardInteractionSource)
+                        .semantics {
+                            contentDescription = "Presiona para desplegar el tendedero y permitir el secado al aire libre"
+                        },
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.CheckCircle,
+                        contentDescription = null,
+                        tint = PastelDesignSystem.TrafficGreen,
+                        modifier = Modifier.size(20.dp),
+                    )
+                    Spacer(modifier = Modifier.width(10.dp))
+                    Text(
+                        text = "Desplegar Tendedero",
+                        fontSize = 15.sp,
+                        fontWeight = FontWeight.Bold,
+                    )
+                }
+            } else {
+                Button(
+                    onClick = onToggleProtection,
+                    interactionSource = cardInteractionSource,
+                    shape = PastelDesignSystem.ShapeButton,
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = if (isRainRisk) PastelDesignSystem.TrafficRed else PastelDesignSystem.TempAccent,
+                        contentColor = Color.White,
+                    ),
+                    elevation = ButtonDefaults.buttonElevation(defaultElevation = 3.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(50.dp)
+                        .pressScaleEffectDashboard(cardInteractionSource)
+                        .semantics {
+                            contentDescription = "Presiona para proteger inmediatamente el tendedero contra la lluvia"
+                        },
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Warning,
+                        contentDescription = null,
+                        modifier = Modifier.size(20.dp),
+                    )
+                    Spacer(modifier = Modifier.width(10.dp))
+                    Text(
+                        text = "Proteger Tendedero Ahora",
+                        fontSize = 15.sp,
+                        fontWeight = FontWeight.Bold,
+                    )
+                }
             }
         }
     }
 }
 
 // ============================================================================
-// 1. TARJETA DE TEMPERATURA
+// 1. TARJETA ACCESIBLE DE TEMPERATURA
 // ============================================================================
 
 @Composable
@@ -519,23 +772,26 @@ private fun TemperatureInteractiveCard(
     isExpanded: Boolean,
     onCardClick: () -> Unit,
 ) {
+    val cardInteractionSource = remember { MutableInteractionSource() }
+
+    val talkBackTempLabel = "Sensor de temperatura ambiental actual: $temperature grados centígrados. Presiona para ver detalle del sensor térmico."
+
     Card(
         modifier = Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(22.dp))
-            .border(1.dp, DashboardPastel.TempCardBorder, RoundedCornerShape(22.dp))
-            .clickable { onCardClick() }
-            .animateContentSize(
-                animationSpec = spring(
-                    dampingRatio = Spring.DampingRatioMediumBouncy,
-                    stiffness = Spring.StiffnessLow,
-                ),
-            ),
-        shape = RoundedCornerShape(22.dp),
-        colors = CardDefaults.cardColors(containerColor = DashboardPastel.TempCardBackground),
+            .pressScaleEffectDashboard(cardInteractionSource)
+            .clip(PastelDesignSystem.ShapeSensorCard)
+            .border(1.dp, PastelDesignSystem.TempBorder, PastelDesignSystem.ShapeSensorCard)
+            .clickable(interactionSource = cardInteractionSource, indication = null) { onCardClick() }
+            .animateContentSize()
+            .semantics(mergeDescendants = true) {
+                contentDescription = talkBackTempLabel
+            },
+        shape = PastelDesignSystem.ShapeSensorCard,
+        colors = CardDefaults.cardColors(containerColor = PastelDesignSystem.TempBackground),
         elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
     ) {
-        Column(modifier = Modifier.padding(20.dp)) {
+        Column(modifier = Modifier.padding(PastelDesignSystem.CardPaddingHorizontal)) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -545,8 +801,8 @@ private fun TemperatureInteractiveCard(
                     Box(
                         modifier = Modifier
                             .size(44.dp)
-                            .clip(CircleShape)
-                            .background(DashboardPastel.TempCardBorder),
+                            .clip(PastelDesignSystem.ShapeCircle)
+                            .background(PastelDesignSystem.TempBorder),
                         contentAlignment = Alignment.Center,
                     ) {
                         Text(text = "🌡️", fontSize = 20.sp)
@@ -557,12 +813,12 @@ private fun TemperatureInteractiveCard(
                             text = "Temperatura",
                             fontSize = 16.sp,
                             fontWeight = FontWeight.Bold,
-                            color = DashboardPastel.TextPrimary,
+                            color = PastelDesignSystem.TextPrimary,
                         )
                         Text(
                             text = "Sensor Térmico",
                             fontSize = 12.sp,
-                            color = DashboardPastel.TextSecondary,
+                            color = PastelDesignSystem.TextSecondary,
                         )
                     }
                 }
@@ -572,13 +828,13 @@ private fun TemperatureInteractiveCard(
                         text = "$temperature °C",
                         fontSize = 20.sp,
                         fontWeight = FontWeight.ExtraBold,
-                        color = DashboardPastel.TempAccent,
+                        color = PastelDesignSystem.TempAccent,
                     )
                     Spacer(modifier = Modifier.width(6.dp))
                     Icon(
                         imageVector = if (isExpanded) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
-                        contentDescription = null,
-                        tint = DashboardPastel.TextSecondary,
+                        contentDescription = "Ver detalle de temperatura",
+                        tint = PastelDesignSystem.TextSecondary,
                     )
                 }
             }
@@ -589,14 +845,14 @@ private fun TemperatureInteractiveCard(
                 exit = fadeOut() + shrinkVertically(),
             ) {
                 Column(modifier = Modifier.padding(top = 16.dp)) {
-                    HorizontalDivider(color = DashboardPastel.TempCardBorder, thickness = 1.dp)
+                    HorizontalDivider(color = PastelDesignSystem.TempBorder, thickness = 1.dp)
                     Spacer(modifier = Modifier.height(12.dp))
 
                     Text(
                         text = "Histórico de Temperatura",
                         fontSize = 12.sp,
                         fontWeight = FontWeight.Bold,
-                        color = DashboardPastel.TextPrimary,
+                        color = PastelDesignSystem.TextPrimary,
                     )
                     Spacer(modifier = Modifier.height(8.dp))
 
@@ -608,7 +864,7 @@ private fun TemperatureInteractiveCard(
                             horizontalArrangement = Arrangement.SpaceBetween,
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
-                            Text(text = reading.time, fontSize = 11.sp, color = DashboardPastel.TextSecondary)
+                            Text(text = reading.time, fontSize = 11.sp, color = PastelDesignSystem.TextSecondary)
                             Row(verticalAlignment = Alignment.CenterVertically) {
                                 LinearProgressIndicator(
                                     progress = { (reading.value.coerceIn(10f, 40f) - 10f) / 30f },
@@ -616,8 +872,8 @@ private fun TemperatureInteractiveCard(
                                         .width(80.dp)
                                         .height(6.dp)
                                         .clip(RoundedCornerShape(3.dp)),
-                                    color = DashboardPastel.TempAccent,
-                                    trackColor = DashboardPastel.TempCardBorder,
+                                    color = PastelDesignSystem.TempAccent,
+                                    trackColor = PastelDesignSystem.TempBorder,
                                     strokeCap = StrokeCap.Round,
                                 )
                                 Spacer(modifier = Modifier.width(8.dp))
@@ -625,7 +881,7 @@ private fun TemperatureInteractiveCard(
                                     text = "${reading.value} °C",
                                     fontSize = 11.sp,
                                     fontWeight = FontWeight.SemiBold,
-                                    color = DashboardPastel.TextPrimary,
+                                    color = PastelDesignSystem.TextPrimary,
                                 )
                             }
                         }
@@ -637,7 +893,7 @@ private fun TemperatureInteractiveCard(
 }
 
 // ============================================================================
-// 2. TARJETA DE HUMEDAD (SEMÁFORO DE LLUVIA)
+// 2. TARJETA ACCESIBLE DE HUMEDAD
 // ============================================================================
 
 @Composable
@@ -646,29 +902,37 @@ private fun HumidityInteractiveCard(
     isExpanded: Boolean,
     onCardClick: () -> Unit,
 ) {
-    val (_, statusColor, isAlert) = when {
-        humidity >= 80 -> Triple("Lluvia Inminente", DashboardPastel.TrafficRed, true)
-        humidity >= 65 -> Triple("Riesgo Moderado", DashboardPastel.TrafficYellow, false)
-        else -> Triple("Estable", DashboardPastel.TrafficGreen, false)
+    val cardInteractionSource = remember { MutableInteractionSource() }
+
+    val (statusText, statusColor, isAlert) = when {
+        humidity >= 80 -> Triple("Lluvia Inminente", PastelDesignSystem.TrafficRed, true)
+        humidity >= 65 -> Triple("Riesgo Moderado", PastelDesignSystem.TrafficYellow, false)
+        else -> Triple("Estable", PastelDesignSystem.TrafficGreen, false)
     }
 
     val animatedBorderColor by animateColorAsState(
-        targetValue = if (isAlert) DashboardPastel.TrafficRed.copy(alpha = 0.5f) else DashboardPastel.HumidCardBorder,
+        targetValue = if (isAlert) PastelDesignSystem.TrafficRed.copy(alpha = 0.5f) else PastelDesignSystem.HumidBorder,
         label = "HumidCardBorder",
     )
+
+    val talkBackHumidLabel = "Sensor de humedad relativa: $humidity por ciento. Estado de prevención: $statusText. Presiona para ver detalle de humedad."
 
     Card(
         modifier = Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(22.dp))
-            .border(1.dp, animatedBorderColor, RoundedCornerShape(22.dp))
-            .clickable { onCardClick() }
-            .animateContentSize(),
-        shape = RoundedCornerShape(22.dp),
-        colors = CardDefaults.cardColors(containerColor = DashboardPastel.HumidCardBackground),
+            .pressScaleEffectDashboard(cardInteractionSource)
+            .clip(PastelDesignSystem.ShapeSensorCard)
+            .border(1.dp, animatedBorderColor, PastelDesignSystem.ShapeSensorCard)
+            .clickable(interactionSource = cardInteractionSource, indication = null) { onCardClick() }
+            .animateContentSize()
+            .semantics(mergeDescendants = true) {
+                contentDescription = talkBackHumidLabel
+            },
+        shape = PastelDesignSystem.ShapeSensorCard,
+        colors = CardDefaults.cardColors(containerColor = PastelDesignSystem.HumidBackground),
         elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
     ) {
-        Column(modifier = Modifier.padding(20.dp)) {
+        Column(modifier = Modifier.padding(PastelDesignSystem.CardPaddingHorizontal)) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -678,8 +942,8 @@ private fun HumidityInteractiveCard(
                     Box(
                         modifier = Modifier
                             .size(44.dp)
-                            .clip(CircleShape)
-                            .background(DashboardPastel.HumidCardBorder),
+                            .clip(PastelDesignSystem.ShapeCircle)
+                            .background(PastelDesignSystem.HumidBorder),
                         contentAlignment = Alignment.Center,
                     ) {
                         Text(text = "💧", fontSize = 20.sp)
@@ -690,12 +954,12 @@ private fun HumidityInteractiveCard(
                             text = "Humedad Relativa",
                             fontSize = 16.sp,
                             fontWeight = FontWeight.Bold,
-                            color = DashboardPastel.TextPrimary,
+                            color = PastelDesignSystem.TextPrimary,
                         )
                         Text(
                             text = "Prevención de Lluvia",
                             fontSize = 12.sp,
-                            color = DashboardPastel.TextSecondary,
+                            color = PastelDesignSystem.TextSecondary,
                         )
                     }
                 }
@@ -710,8 +974,8 @@ private fun HumidityInteractiveCard(
                     Spacer(modifier = Modifier.width(6.dp))
                     Icon(
                         imageVector = if (isExpanded) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
-                        contentDescription = null,
-                        tint = DashboardPastel.TextSecondary,
+                        contentDescription = "Ver detalle de humedad",
+                        tint = PastelDesignSystem.TextSecondary,
                     )
                 }
             }
@@ -722,29 +986,29 @@ private fun HumidityInteractiveCard(
                 exit = fadeOut() + shrinkVertically(),
             ) {
                 Column(modifier = Modifier.padding(top = 16.dp)) {
-                    HorizontalDivider(color = DashboardPastel.HumidCardBorder, thickness = 1.dp)
+                    HorizontalDivider(color = PastelDesignSystem.HumidBorder, thickness = 1.dp)
                     Spacer(modifier = Modifier.height(12.dp))
 
                     Text(
                         text = "Sistema de Alerta Preventiva (Semáforo)",
                         fontSize = 12.sp,
                         fontWeight = FontWeight.Bold,
-                        color = DashboardPastel.TextPrimary,
+                        color = PastelDesignSystem.TextPrimary,
                     )
                     Spacer(modifier = Modifier.height(10.dp))
 
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .clip(RoundedCornerShape(14.dp))
+                            .clip(PastelDesignSystem.ShapeBadge)
                             .background(Color.White.copy(alpha = 0.6f))
                             .padding(8.dp),
                         horizontalArrangement = Arrangement.SpaceEvenly,
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
-                        TrafficLightItem("Estable (<65%)", DashboardPastel.TrafficGreen, humidity < 65)
-                        TrafficLightItem("Precaución (65-79%)", DashboardPastel.TrafficYellow, humidity in 65..79)
-                        TrafficLightItem("Alerta Lluvia (≥80%)", DashboardPastel.TrafficRed, humidity >= 80)
+                        TrafficLightItem("Estable (<65%)", PastelDesignSystem.TrafficGreen, humidity < 65)
+                        TrafficLightItem("Precaución (65-79%)", PastelDesignSystem.TrafficYellow, humidity in 65..79)
+                        TrafficLightItem("Alerta Lluvia (≥80%)", PastelDesignSystem.TrafficRed, humidity >= 80)
                     }
 
                     Spacer(modifier = Modifier.height(12.dp))
@@ -752,9 +1016,9 @@ private fun HumidityInteractiveCard(
                     Box(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .clip(RoundedCornerShape(12.dp))
+                            .clip(PastelDesignSystem.ShapeBadge)
                             .background(statusColor.copy(alpha = 0.15f))
-                            .border(1.dp, statusColor.copy(alpha = 0.4f), RoundedCornerShape(12.dp))
+                            .border(1.dp, statusColor.copy(alpha = 0.4f), PastelDesignSystem.ShapeBadge)
                             .padding(12.dp),
                     ) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -773,7 +1037,7 @@ private fun HumidityInteractiveCard(
                                 },
                                 fontSize = 11.sp,
                                 fontWeight = FontWeight.SemiBold,
-                                color = DashboardPastel.TextPrimary,
+                                color = PastelDesignSystem.TextPrimary,
                             )
                         }
                     }
@@ -789,20 +1053,25 @@ private fun TrafficLightItem(
     color: Color,
     isActive: Boolean,
 ) {
-    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+    Column(
+        horizontalAlignment = Alignment.CenterHorizontally,
+        modifier = Modifier.semantics(mergeDescendants = true) {
+            contentDescription = "Luz de semáforo $label. ${if (isActive) "Activa actualmente" else "Inactiva"}"
+        },
+    ) {
         Box(
             modifier = Modifier
                 .size(26.dp)
-                .clip(CircleShape)
+                .clip(PastelDesignSystem.ShapeCircle)
                 .background(if (isActive) color else color.copy(alpha = 0.25f))
-                .border(if (isActive) 2.dp else 1.dp, if (isActive) color else Color.Transparent, CircleShape),
+                .border(if (isActive) 2.dp else 1.dp, if (isActive) color else Color.Transparent, PastelDesignSystem.ShapeCircle),
             contentAlignment = Alignment.Center,
         ) {
             if (isActive) {
                 Box(
                     modifier = Modifier
                         .size(8.dp)
-                        .clip(CircleShape)
+                        .clip(PastelDesignSystem.ShapeCircle)
                         .background(Color.White),
                 )
             }
@@ -813,13 +1082,13 @@ private fun TrafficLightItem(
             fontSize = 9.sp,
             textAlign = TextAlign.Center,
             fontWeight = if (isActive) FontWeight.Bold else FontWeight.Normal,
-            color = if (isActive) DashboardPastel.TextPrimary else DashboardPastel.TextSecondary,
+            color = if (isActive) PastelDesignSystem.TextPrimary else PastelDesignSystem.TextSecondary,
         )
     }
 }
 
 // ============================================================================
-// 3. TARJETA DE NIVEL DE AGUA (SENSOR BX5)
+// 3. TARJETA ACCESIBLE DE NIVEL DE AGUA (SENSOR BX5)
 // ============================================================================
 
 @Composable
@@ -828,22 +1097,30 @@ private fun WaterLevelInteractiveCard(
     isExpanded: Boolean,
     onCardClick: () -> Unit,
 ) {
+    val cardInteractionSource = remember { MutableInteractionSource() }
+
     val isCritical = waterPercent >= 75
     val statusLabel = if (isCritical) "Crítico" else "Normal"
-    val statusColor = if (isCritical) DashboardPastel.TrafficRed else DashboardPastel.TrafficGreen
+    val statusColor = if (isCritical) PastelDesignSystem.TrafficRed else PastelDesignSystem.TrafficGreen
+
+    val talkBackWaterLabel = "Sensor de nivel de agua módulo BX5 al $waterPercent por ciento de capacidad. Estado $statusLabel. Presiona para ver detalle del módulo BX5."
 
     Card(
         modifier = Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(22.dp))
-            .border(1.dp, DashboardPastel.WaterCardBorder, RoundedCornerShape(22.dp))
-            .clickable { onCardClick() }
-            .animateContentSize(),
-        shape = RoundedCornerShape(22.dp),
-        colors = CardDefaults.cardColors(containerColor = DashboardPastel.WaterCardBackground),
+            .pressScaleEffectDashboard(cardInteractionSource)
+            .clip(PastelDesignSystem.ShapeSensorCard)
+            .border(1.dp, PastelDesignSystem.WaterBorder, PastelDesignSystem.ShapeSensorCard)
+            .clickable(interactionSource = cardInteractionSource, indication = null) { onCardClick() }
+            .animateContentSize()
+            .semantics(mergeDescendants = true) {
+                contentDescription = talkBackWaterLabel
+            },
+        shape = PastelDesignSystem.ShapeSensorCard,
+        colors = CardDefaults.cardColors(containerColor = PastelDesignSystem.WaterBackground),
         elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
     ) {
-        Column(modifier = Modifier.padding(20.dp)) {
+        Column(modifier = Modifier.padding(PastelDesignSystem.CardPaddingHorizontal)) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -853,8 +1130,8 @@ private fun WaterLevelInteractiveCard(
                     Box(
                         modifier = Modifier
                             .size(44.dp)
-                            .clip(CircleShape)
-                            .background(DashboardPastel.WaterCardBorder),
+                            .clip(PastelDesignSystem.ShapeCircle)
+                            .background(PastelDesignSystem.WaterBorder),
                         contentAlignment = Alignment.Center,
                     ) {
                         Text(text = "🌊", fontSize = 20.sp)
@@ -865,12 +1142,12 @@ private fun WaterLevelInteractiveCard(
                             text = "Nivel de Agua",
                             fontSize = 16.sp,
                             fontWeight = FontWeight.Bold,
-                            color = DashboardPastel.TextPrimary,
+                            color = PastelDesignSystem.TextPrimary,
                         )
                         Text(
                             text = "Módulo Sensor BX5",
                             fontSize = 12.sp,
-                            color = DashboardPastel.TextSecondary,
+                            color = PastelDesignSystem.TextSecondary,
                         )
                     }
                 }
@@ -878,7 +1155,7 @@ private fun WaterLevelInteractiveCard(
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Box(
                         modifier = Modifier
-                            .clip(RoundedCornerShape(8.dp))
+                            .clip(PastelDesignSystem.ShapeBadge)
                             .background(statusColor.copy(alpha = 0.2f))
                             .padding(horizontal = 8.dp, vertical = 3.dp),
                     ) {
@@ -894,13 +1171,13 @@ private fun WaterLevelInteractiveCard(
                         text = "$waterPercent %",
                         fontSize = 20.sp,
                         fontWeight = FontWeight.ExtraBold,
-                        color = DashboardPastel.WaterAccent,
+                        color = PastelDesignSystem.WaterAccent,
                     )
                     Spacer(modifier = Modifier.width(6.dp))
                     Icon(
                         imageVector = if (isExpanded) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
-                        contentDescription = null,
-                        tint = DashboardPastel.TextSecondary,
+                        contentDescription = "Ver detalle del nivel de agua BX5",
+                        tint = PastelDesignSystem.TextSecondary,
                     )
                 }
             }
@@ -911,14 +1188,14 @@ private fun WaterLevelInteractiveCard(
                 exit = fadeOut() + shrinkVertically(),
             ) {
                 Column(modifier = Modifier.padding(top = 16.dp)) {
-                    HorizontalDivider(color = DashboardPastel.WaterCardBorder, thickness = 1.dp)
+                    HorizontalDivider(color = PastelDesignSystem.WaterBorder, thickness = 1.dp)
                     Spacer(modifier = Modifier.height(12.dp))
 
                     Text(
                         text = "Indicador Visual del Nivel de Líquido (BX5)",
                         fontSize = 12.sp,
                         fontWeight = FontWeight.Bold,
-                        color = DashboardPastel.TextPrimary,
+                        color = PastelDesignSystem.TextPrimary,
                     )
                     Spacer(modifier = Modifier.height(10.dp))
 
@@ -927,9 +1204,12 @@ private fun WaterLevelInteractiveCard(
                         modifier = Modifier
                             .fillMaxWidth()
                             .height(10.dp)
-                            .clip(RoundedCornerShape(5.dp)),
-                        color = if (isCritical) DashboardPastel.TrafficRed else DashboardPastel.WaterAccent,
-                        trackColor = DashboardPastel.WaterCardBorder,
+                            .clip(RoundedCornerShape(5.dp))
+                            .semantics {
+                                contentDescription = "Barra indicadora de nivel de líquido al $waterPercent por ciento"
+                            },
+                        color = if (isCritical) PastelDesignSystem.TrafficRed else PastelDesignSystem.WaterAccent,
+                        trackColor = PastelDesignSystem.WaterBorder,
                         strokeCap = StrokeCap.Round,
                     )
                     Spacer(modifier = Modifier.height(6.dp))
@@ -937,9 +1217,9 @@ private fun WaterLevelInteractiveCard(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceBetween,
                     ) {
-                        Text(text = "0% (Seco)", fontSize = 10.sp, color = DashboardPastel.TextSecondary)
-                        Text(text = "50%", fontSize = 10.sp, color = DashboardPastel.TextSecondary)
-                        Text(text = "100% (Crítico)", fontSize = 10.sp, color = DashboardPastel.TextSecondary)
+                        Text(text = "0% (Seco)", fontSize = 10.sp, color = PastelDesignSystem.TextSecondary)
+                        Text(text = "50%", fontSize = 10.sp, color = PastelDesignSystem.TextSecondary)
+                        Text(text = "100% (Crítico)", fontSize = 10.sp, color = PastelDesignSystem.TextSecondary)
                     }
 
                     Spacer(modifier = Modifier.height(12.dp))
@@ -947,14 +1227,14 @@ private fun WaterLevelInteractiveCard(
                     Box(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .clip(RoundedCornerShape(12.dp))
+                            .clip(PastelDesignSystem.ShapeBadge)
                             .background(Color.White.copy(alpha = 0.7f))
-                            .border(1.dp, DashboardPastel.WaterCardBorder, RoundedCornerShape(12.dp))
+                            .border(1.dp, PastelDesignSystem.WaterBorder, PastelDesignSystem.ShapeBadge)
                             .padding(12.dp),
                     ) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Icon(
-                                imageVector = Icons.Default.Info,
+                                imageVector = if (isCritical) Icons.Default.Warning else Icons.Default.CheckCircle,
                                 contentDescription = null,
                                 tint = statusColor,
                                 modifier = Modifier.size(18.dp),
@@ -966,7 +1246,7 @@ private fun WaterLevelInteractiveCard(
                                 else
                                     "Módulo BX5 operando dentro de los límites de seguridad.",
                                 fontSize = 11.sp,
-                                color = DashboardPastel.TextPrimary,
+                                color = PastelDesignSystem.TextPrimary,
                             )
                         }
                     }

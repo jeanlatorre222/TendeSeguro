@@ -12,12 +12,14 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -32,6 +34,8 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
@@ -44,34 +48,59 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.tendeseguro20.ui.theme.TendeSeguro20Theme
 
 // ============================================================================
-// PALETA PASTEL DE CONFIGURACIÓN
+// PALETA PASTEL DINÁMICA DE CONFIGURACIÓN
 // ============================================================================
 
 private object SettingsPastel {
-    val Background = Color(0xFFFAF8F5)
-    val TextPrimary = Color(0xFF2C3E50)
-    val TextSecondary = Color(0xFF7F8C8D)
+    val Background: Color
+        @Composable get() = if (AppThemeState.isDarkModeEnabled) Color(0xFF121212) else Color(0xFFFAF8F5)
 
-    val CardBackground = Color(0xFFEBF3FE)
-    val CardBorder = Color(0xFFD0E2FF)
-    val AccentBlue = Color(0xFF4A90E2)
+    val TextPrimary: Color
+        @Composable get() = if (AppThemeState.isDarkModeEnabled) Color(0xFFF8FAFC) else Color(0xFF1E293B)
 
-    val CardBackgroundGreen = Color(0xFFEBF8F2)
-    val CardBorderGreen = Color(0xFFC7EFE0)
-    val AccentGreen = Color(0xFF7BCD9B)
+    val TextSecondary: Color
+        @Composable get() = if (AppThemeState.isDarkModeEnabled) Color(0xFF94A3B8) else Color(0xFF475569)
 
-    val LogoutBackground = Color(0xFFFFF0ED)
-    val LogoutBorder = Color(0xFFFFC4B8)
-    val LogoutRed = Color(0xFFEF476F)
+    val CardBackground: Color
+        @Composable get() = if (AppThemeState.isDarkModeEnabled) Color(0xFF1E293B) else Color(0xFFEBF3FE)
+
+    val CardBorder: Color
+        @Composable get() = if (AppThemeState.isDarkModeEnabled) Color(0xFF334155) else Color(0xFFD0E2FF)
+
+    val AccentBlue: Color
+        @Composable get() = if (AppThemeState.isDarkModeEnabled) Color(0xFF60A5FA) else Color(0xFF1D4ED8)
+
+    val CardBackgroundGreen: Color
+        @Composable get() = if (AppThemeState.isDarkModeEnabled) Color(0xFF143826) else Color(0xFFEBF8F2)
+
+    val CardBorderGreen: Color
+        @Composable get() = if (AppThemeState.isDarkModeEnabled) Color(0xFF1D523B) else Color(0xFFC7EFE0)
+
+    val AccentGreen: Color
+        @Composable get() = if (AppThemeState.isDarkModeEnabled) Color(0xFF4ADE80) else Color(0xFF15803D)
+
+    val LogoutBackground: Color
+        @Composable get() = if (AppThemeState.isDarkModeEnabled) Color(0xFF3B1719) else Color(0xFFFFF0ED)
+
+    val LogoutBorder: Color
+        @Composable get() = if (AppThemeState.isDarkModeEnabled) Color(0xFF692429) else Color(0xFFFFC4B8)
+
+    val LogoutRed: Color
+        @Composable get() = if (AppThemeState.isDarkModeEnabled) Color(0xFFF87171) else Color(0xFFB91C1C)
 }
 
 // ============================================================================
@@ -85,6 +114,7 @@ fun SettingsScreen(
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
+    val focusManager = LocalFocusManager.current
     val secureTokenManager = remember { SecureTokenManager(context) }
     val userEmail = remember { secureTokenManager.getUserEmail() ?: "usuario@tendeseguro.com" }
 
@@ -92,6 +122,12 @@ fun SettingsScreen(
     var rainAlertsEnabled by remember { mutableStateOf(true) }
     var sensorBx5AlertsEnabled by remember { mutableStateOf(true) }
     var dailySummaryEnabled by remember { mutableStateOf(false) }
+
+    // Estados de Umbrales con Teclado Numérico
+    var humidityThresholdInput by remember { mutableStateOf("80") }
+    var tempThresholdInput by remember { mutableStateOf("32.5") }
+
+    val tempFocusRequester = remember { FocusRequester() }
 
     // Estados de diálogos
     var showTermsDialog by remember { mutableStateOf(false) }
@@ -105,7 +141,8 @@ fun SettingsScreen(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(horizontal = 20.dp, vertical = 20.dp)
-                .verticalScroll(rememberScrollState()),
+                .verticalScroll(rememberScrollState())
+                .imePadding(),
             verticalArrangement = Arrangement.spacedBy(18.dp),
         ) {
             // Header con botón Atrás y Título
@@ -133,9 +170,9 @@ fun SettingsScreen(
             Card(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .clip(RoundedCornerShape(24.dp))
-                    .border(1.dp, SettingsPastel.CardBorder, RoundedCornerShape(24.dp)),
-                shape = RoundedCornerShape(24.dp),
+                    .clip(PastelDesignSystem.ShapeHeroCard)
+                    .border(1.dp, SettingsPastel.CardBorder, PastelDesignSystem.ShapeHeroCard),
+                shape = PastelDesignSystem.ShapeHeroCard,
                 colors = CardDefaults.cardColors(containerColor = SettingsPastel.CardBackground),
                 elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
             ) {
@@ -177,7 +214,7 @@ fun SettingsScreen(
                         Spacer(modifier = Modifier.height(4.dp))
                         Box(
                             modifier = Modifier
-                                .clip(RoundedCornerShape(8.dp))
+                                .clip(PastelDesignSystem.ShapeBadge)
                                 .background(SettingsPastel.AccentGreen.copy(alpha = 0.2f))
                                 .padding(horizontal = 8.dp, vertical = 2.dp),
                         ) {
@@ -192,7 +229,96 @@ fun SettingsScreen(
                 }
             }
 
-            // SECCIÓN 1: PREFERENCIAS DE NOTIFICACIONES
+            // SECCIÓN TEMA VISUAL (SINCRONIZADO DIRECTAMENTE CON MATERIALTHEME)
+            Text(
+                text = "Apariencia Visual",
+                fontSize = 15.sp,
+                fontWeight = FontWeight.Bold,
+                color = SettingsPastel.TextPrimary,
+            )
+
+            Card(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(PastelDesignSystem.ShapeSensorCard)
+                    .border(1.dp, SettingsPastel.CardBorder, PastelDesignSystem.ShapeSensorCard),
+                shape = PastelDesignSystem.ShapeSensorCard,
+                colors = CardDefaults.cardColors(containerColor = SettingsPastel.CardBackground),
+                elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
+            ) {
+                Column(modifier = Modifier.padding(18.dp)) {
+                    SettingSwitchItem(
+                        title = "Tema Oscuro / Modo Nocturno",
+                        subtitle = "Alternar entre paleta suave pastel clara u oscura en toda la app",
+                        checked = AppThemeState.isDarkModeEnabled,
+                        onCheckedChange = { AppThemeState.toggleDarkMode(it) },
+                    )
+                }
+            }
+
+            // SECCIÓN UMBRALES CON TECLADO NUMÉRICO ADAPTATIVO
+            Text(
+                text = "Umbrales Personalizados de Sensores",
+                fontSize = 15.sp,
+                fontWeight = FontWeight.Bold,
+                color = SettingsPastel.TextPrimary,
+            )
+
+            Card(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(PastelDesignSystem.ShapeSensorCard)
+                    .border(1.dp, SettingsPastel.CardBorder, PastelDesignSystem.ShapeSensorCard)
+                    .animateContentSize(),
+                shape = PastelDesignSystem.ShapeSensorCard,
+                colors = CardDefaults.cardColors(containerColor = SettingsPastel.CardBackground),
+                elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
+            ) {
+                Column(
+                    modifier = Modifier.padding(18.dp),
+                    verticalArrangement = Arrangement.spacedBy(14.dp),
+                ) {
+                    OutlinedTextField(
+                        value = humidityThresholdInput,
+                        onValueChange = { humidityThresholdInput = it },
+                        label = { Text("Umbral Lluvia - Humedad (%)") },
+                        leadingIcon = { Text("💧", fontSize = 18.sp) },
+                        singleLine = true,
+                        keyboardOptions = KeyboardOptions(
+                            keyboardType = KeyboardType.Number,
+                            imeAction = ImeAction.Next,
+                        ),
+                        keyboardActions = KeyboardActions(
+                            onNext = { tempFocusRequester.requestFocus() },
+                        ),
+                        shape = PastelDesignSystem.ShapeButton,
+                        colors = settingsTextFieldColors(),
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+
+                    OutlinedTextField(
+                        value = tempThresholdInput,
+                        onValueChange = { tempThresholdInput = it },
+                        label = { Text("Temperatura Máxima Alerta (°C)") },
+                        leadingIcon = { Text("🌡️", fontSize = 18.sp) },
+                        singleLine = true,
+                        keyboardOptions = KeyboardOptions(
+                            keyboardType = KeyboardType.Decimal,
+                            imeAction = ImeAction.Done,
+                        ),
+                        keyboardActions = KeyboardActions(
+                            onDone = { focusManager.clearFocus() },
+                        ),
+                        shape = PastelDesignSystem.ShapeButton,
+                        colors = settingsTextFieldColors(),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .focusRequester(tempFocusRequester),
+                    )
+                }
+            }
+
+            // SECCIÓN PREFERENCIAS DE NOTIFICACIONES
             Text(
                 text = "Notificaciones y Alertas",
                 fontSize = 15.sp,
@@ -203,17 +329,16 @@ fun SettingsScreen(
             Card(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .clip(RoundedCornerShape(22.dp))
-                    .border(1.dp, SettingsPastel.CardBorderGreen, RoundedCornerShape(22.dp)),
-                shape = RoundedCornerShape(22.dp),
+                    .clip(PastelDesignSystem.ShapeSensorCard)
+                    .border(1.dp, SettingsPastel.CardBorderGreen, PastelDesignSystem.ShapeSensorCard),
+                shape = PastelDesignSystem.ShapeSensorCard,
                 colors = CardDefaults.cardColors(containerColor = SettingsPastel.CardBackgroundGreen),
                 elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
             ) {
                 Column(modifier = Modifier.padding(18.dp)) {
-                    // Switch 1: Alertas de lluvia
                     SettingSwitchItem(
                         title = "Alertas de Lluvia Inminente",
-                        subtitle = "Avisos instantáneos cuando la humedad supere el 80%",
+                        subtitle = "Avisos instantáneos cuando la humedad supere el $humidityThresholdInput%",
                         checked = rainAlertsEnabled,
                         onCheckedChange = { rainAlertsEnabled = it },
                     )
@@ -224,7 +349,6 @@ fun SettingsScreen(
                         modifier = Modifier.padding(vertical = 12.dp),
                     )
 
-                    // Switch 2: Sensor BX5
                     SettingSwitchItem(
                         title = "Alertas de Agua Sensor BX5",
                         subtitle = "Notificar acumulación de agua en la plataforma",
@@ -238,7 +362,6 @@ fun SettingsScreen(
                         modifier = Modifier.padding(vertical = 12.dp),
                     )
 
-                    // Switch 3: Resumen Diario
                     SettingSwitchItem(
                         title = "Resumen Diario de Clima",
                         subtitle = "Recibir reporte matutino de temperatura y humedad",
@@ -248,7 +371,7 @@ fun SettingsScreen(
                 }
             }
 
-            // SECCIÓN 2: INFORMACIÓN LEGAL Y SOPORTE
+            // SECCIÓN INFORMACIÓN LEGAL Y SISTEMA
             Text(
                 text = "Información Legal y Sistema",
                 fontSize = 15.sp,
@@ -259,14 +382,13 @@ fun SettingsScreen(
             Card(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .clip(RoundedCornerShape(22.dp))
-                    .border(1.dp, SettingsPastel.CardBorder, RoundedCornerShape(22.dp)),
-                shape = RoundedCornerShape(22.dp),
+                    .clip(PastelDesignSystem.ShapeSensorCard)
+                    .border(1.dp, SettingsPastel.CardBorder, PastelDesignSystem.ShapeSensorCard),
+                shape = PastelDesignSystem.ShapeSensorCard,
                 colors = CardDefaults.cardColors(containerColor = SettingsPastel.CardBackground),
                 elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
             ) {
                 Column(modifier = Modifier.padding(18.dp)) {
-                    // Item Términos de Servicio
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -299,7 +421,6 @@ fun SettingsScreen(
                         modifier = Modifier.padding(vertical = 10.dp),
                     )
 
-                    // Item Versión
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceBetween,
@@ -322,14 +443,14 @@ fun SettingsScreen(
 
             Spacer(modifier = Modifier.height(8.dp))
 
-            // SECCIÓN 3: BOTÓN CLARO PARA CERRAR SESIÓN
+            // BOTÓN CIERRE DE SESIÓN
             Card(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .clip(RoundedCornerShape(22.dp))
-                    .border(1.dp, SettingsPastel.LogoutBorder, RoundedCornerShape(22.dp))
+                    .clip(PastelDesignSystem.ShapeSensorCard)
+                    .border(1.dp, SettingsPastel.LogoutBorder, PastelDesignSystem.ShapeSensorCard)
                     .clickable { showLogoutConfirmDialog = true },
-                shape = RoundedCornerShape(22.dp),
+                shape = PastelDesignSystem.ShapeSensorCard,
                 colors = CardDefaults.cardColors(containerColor = SettingsPastel.LogoutBackground),
                 elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
             ) {
@@ -355,7 +476,6 @@ fun SettingsScreen(
         }
     }
 
-    // DIÁLOGO TÉRMINOS DE SERVICIO
     if (showTermsDialog) {
         AlertDialog(
             onDismissRequest = { showTermsDialog = false },
@@ -383,12 +503,11 @@ fun SettingsScreen(
                     Text("Entendido", fontWeight = FontWeight.Bold)
                 }
             },
-            shape = RoundedCornerShape(20.dp),
+            shape = PastelDesignSystem.ShapeSensorCard,
             containerColor = SettingsPastel.Background,
         )
     }
 
-    // DIÁLOGO CONFIRMACIÓN CIERRE DE SESIÓN
     if (showLogoutConfirmDialog) {
         AlertDialog(
             onDismissRequest = { showLogoutConfirmDialog = false },
@@ -423,15 +542,21 @@ fun SettingsScreen(
                     Text("Cancelar")
                 }
             },
-            shape = RoundedCornerShape(20.dp),
+            shape = PastelDesignSystem.ShapeSensorCard,
             containerColor = SettingsPastel.Background,
         )
     }
 }
 
-// ============================================================================
-// ITEM SWITCH REUTILIZABLE
-// ============================================================================
+@Composable
+private fun settingsTextFieldColors() = OutlinedTextFieldDefaults.colors(
+    focusedContainerColor = if (AppThemeState.isDarkModeEnabled) Color(0xFF1E1E1E) else Color.White,
+    unfocusedContainerColor = if (AppThemeState.isDarkModeEnabled) Color(0xFF1E1E1E) else Color.White,
+    focusedBorderColor = SettingsPastel.AccentBlue,
+    unfocusedBorderColor = SettingsPastel.CardBorder,
+    focusedLabelColor = SettingsPastel.AccentBlue,
+    unfocusedLabelColor = SettingsPastel.TextSecondary,
+)
 
 @Composable
 private fun SettingSwitchItem(
@@ -474,10 +599,6 @@ private fun SettingSwitchItem(
         )
     }
 }
-
-// ============================================================================
-// PREVIEW
-// ============================================================================
 
 @Preview(showBackground = true, showSystemUi = true)
 @Composable

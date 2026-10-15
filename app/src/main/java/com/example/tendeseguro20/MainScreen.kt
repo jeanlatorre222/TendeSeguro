@@ -4,6 +4,7 @@ import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
@@ -12,6 +13,8 @@ import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -41,24 +44,30 @@ import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.LinearProgressIndicator
-import androidx.compose.material3.Surface
+import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Snackbar
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.tendeseguro20.ui.theme.TendeSeguro20Theme
+import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -66,20 +75,35 @@ import kotlin.math.roundToInt
 import kotlin.random.Random
 
 // ============================================================================
-// MODELOS DE DATOS Y ESTADO LOCAL
+// MICROINTERACCIÓN DE ESCALA REUTILIZABLE
 // ============================================================================
 
-/**
- * Representa una lectura histórica de temperatura.
- */
+@Composable
+fun Modifier.pressScaleEffect(interactionSource: MutableInteractionSource): Modifier {
+    val isPressed by interactionSource.collectIsPressedAsState()
+    val scale by animateFloatAsState(
+        targetValue = if (isPressed) 0.96f else 1.0f,
+        animationSpec = spring(
+            dampingRatio = Spring.DampingRatioMediumBouncy,
+            stiffness = Spring.StiffnessLow
+        ),
+        label = "PressScaleAnimation"
+    )
+    return this.graphicsLayer {
+        scaleX = scale
+        scaleY = scale
+    }
+}
+
+// ============================================================================
+// MODELOS DE DATOS Y ESTADO LOCAL CON SOPORTE OFFLINE
+// ============================================================================
+
 data class TemperatureReading(
     val time: String,
     val value: Float,
 )
 
-/**
- * Estado general de los datos IoT de la aplicación.
- */
 data class IotDataState(
     val temperature: Float = 24.5f,
     val humidity: Int = 82,
@@ -91,7 +115,7 @@ data class IotDataState(
         TemperatureReading("02:00 PM", 25.1f),
         TemperatureReading("04:00 PM", 24.5f),
     ),
-    val lastUpdated: String = "Justo ahora",
+    val lastUpdated: String = "Justo ahora (En caché)",
 )
 
 // ============================================================================
@@ -99,25 +123,24 @@ data class IotDataState(
 // ============================================================================
 
 private object PastelPalette {
-    val Background = Color(0xFFFBF9F5)       // Crema / Gris muy claro suave
-    val TextPrimary = Color(0xFF2C3E50)      // Azul oscuro / Gris antracita suave
-    val TextSecondary = Color(0xFF7F8C8D)    // Gris medio suave
+    val Background = Color(0xFFFAF8F5)
+    val TextPrimary = Color(0xFF2C3E50)
+    val TextSecondary = Color(0xFF7F8C8D)
 
-    // Tarjeta Temperatura (Azul Pastel Soft)
     val TempCardBackground = Color(0xFFEBF3FE)
     val TempCardBorder = Color(0xFFD0E2FF)
     val TempAccent = Color(0xFF4A90E2)
 
-    // Tarjeta Humedad (Verde / Menta Pastel)
     val HumidCardBackground = Color(0xFFEBF8F2)
     val HumidCardBorder = Color(0xFFC7EFE0)
 
-    // Tarjeta Agua / Sensor BX5 (Melocotón / Naranja Pastel)
     val WaterCardBackground = Color(0xFFFFF3EC)
     val WaterCardBorder = Color(0xFFFFE0D1)
     val WaterAccent = Color(0xFFE67E22)
 
-    // Semáforo Pastel
+    val OfflineBannerBackground = Color(0xFFFFF0ED)
+    val OfflineBannerBorder = Color(0xFFFFC4B8)
+
     val TrafficGreen = Color(0xFF7BCD9B)
     val TrafficYellow = Color(0xFFFFD166)
     val TrafficRed = Color(0xFFEF476F)
@@ -129,29 +152,59 @@ private object PastelPalette {
 
 @Composable
 fun MainScreen(modifier: Modifier = Modifier) {
-    // Estado principal simulado (Mock Data)
     var iotData by remember { mutableStateOf(IotDataState()) }
 
-    // Estados de expansión de tarjetas
-    var isTempExpanded by remember { mutableStateOf(value = false) }
-    var isHumidExpanded by remember { mutableStateOf(value = false) }
-    var isWaterExpanded by remember { mutableStateOf(value = false) }
+    // Estado booleano de conexión (Simulado)
+    var isOffline by remember { mutableStateOf(false) }
 
-    Surface(
+    // Estado para simular error técnico de carga
+    var isTechnicalError by remember { mutableStateOf(false) }
+
+    // Estados de expansión de tarjetas
+    var isTempExpanded by remember { mutableStateOf(false) }
+    var isHumidExpanded by remember { mutableStateOf(false) }
+    var isWaterExpanded by remember { mutableStateOf(false) }
+
+    val snackbarHostState = remember { SnackbarHostState() }
+    val coroutineScope = rememberCoroutineScope()
+
+    Scaffold(
         modifier = modifier.fillMaxSize(),
-        color = PastelPalette.Background
-    ) {
+        snackbarHost = {
+            SnackbarHost(hostState = snackbarHostState) { snackbarData ->
+                Snackbar(
+                    snackbarData = snackbarData,
+                    containerColor = Color(0xFF2C3E50),
+                    contentColor = Color.White,
+                    shape = RoundedCornerShape(16.dp),
+                    modifier = Modifier.padding(16.dp)
+                )
+            }
+        },
+        containerColor = PastelPalette.Background
+    ) { innerPadding ->
         Column(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(horizontal = 20.dp, vertical = 24.dp)
+                .padding(innerPadding)
+                .padding(horizontal = 20.dp, vertical = 16.dp)
                 .verticalScroll(rememberScrollState()),
-            verticalArrangement = Arrangement.spacedBy(18.dp)
+            verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
             // Header con Título y Botón de Actualizar
             HeaderSection(
                 lastUpdated = iotData.lastUpdated,
+                isOffline = isOffline,
+                onToggleOffline = { isOffline = !isOffline },
                 onRefreshClick = {
+                    if (isOffline) {
+                        coroutineScope.launch {
+                            snackbarHostState.currentSnackbarData?.dismiss()
+                            snackbarHostState.showSnackbar("Estás sin conexión. Mostrando datos guardados en caché 📡")
+                        }
+                        return@HeaderSection
+                    }
+
                     val rawTemp = Random.nextFloat() * 14f + 18f
                     val newTemp = (rawTemp * 10f).roundToInt() / 10.0f
                     val newHumid = Random.nextInt(45, 96)
@@ -160,7 +213,7 @@ fun MainScreen(modifier: Modifier = Modifier) {
 
                     val updatedHistory = iotData.history.toMutableList().apply {
                         add(TemperatureReading(currentTime, newTemp))
-                        if (size > 7) removeAt(0) // Mantener máximo 7 lecturas
+                        if (size > 7) removeAt(0)
                     }
 
                     iotData = IotDataState(
@@ -170,30 +223,78 @@ fun MainScreen(modifier: Modifier = Modifier) {
                         history = updatedHistory,
                         lastUpdated = currentTime
                     )
+
+                    coroutineScope.launch {
+                        snackbarHostState.currentSnackbarData?.dismiss()
+                        snackbarHostState.showSnackbar("Datos de sensores IoT actualizados correctamente 🔄")
+                    }
                 }
             )
 
-            // 1. TARJETA DE TEMPERATURA
-            TemperatureCard(
-                temperature = iotData.temperature,
-                history = iotData.history,
-                isExpanded = isTempExpanded,
-                onCardClick = { isTempExpanded = !isTempExpanded }
-            )
+            // 1. BANNER SUTIL DE SIN CONEXIÓN (MANTIENE VISIBLES LOS DATOS EN CACHÉ)
+            AnimatedVisibility(
+                visible = isOffline,
+                enter = fadeIn() + expandVertically(),
+                exit = fadeOut() + shrinkVertically()
+            ) {
+                OfflineBanner()
+            }
 
-            // 2. TARJETA DE HUMEDAD (PREVENCIÓN DE LLUVIA Y SEMÁFORO)
-            HumidityCard(
-                humidity = iotData.humidity,
-                isExpanded = isHumidExpanded,
-                onCardClick = { isHumidExpanded = !isHumidExpanded }
-            )
+            // 2. MANEJO DE ERRORES AMIGABLES (SI OCURRE UN FALLO TÉCNICO)
+            if (isTechnicalError) {
+                FriendlyErrorView(
+                    onRetry = {
+                        isTechnicalError = false
+                        coroutineScope.launch {
+                            snackbarHostState.showSnackbar("Conexión restablecida con los sensores 📡")
+                        }
+                    }
+                )
+            } else {
+                // 3. TARJETAS INTERACTIVAS DE SENSORES EN TIEMPO REAL / CACHÉ
+                TemperatureCard(
+                    temperature = iotData.temperature,
+                    history = iotData.history,
+                    isExpanded = isTempExpanded,
+                    onCardClick = {
+                        isTempExpanded = !isTempExpanded
+                        coroutineScope.launch {
+                            snackbarHostState.currentSnackbarData?.dismiss()
+                            snackbarHostState.showSnackbar(
+                                if (isTempExpanded) "Histórico de temperatura desplegado 🌡️" else "Histórico contraído"
+                            )
+                        }
+                    }
+                )
 
-            // 3. TARJETA DE NIVEL DE AGUA (SENSOR BX5)
-            WaterLevelCard(
-                waterPercent = iotData.waterLevelPercent,
-                isExpanded = isWaterExpanded,
-                onCardClick = { isWaterExpanded = !isWaterExpanded }
-            )
+                HumidityCard(
+                    humidity = iotData.humidity,
+                    isExpanded = isHumidExpanded,
+                    onCardClick = {
+                        isHumidExpanded = !isHumidExpanded
+                        coroutineScope.launch {
+                            snackbarHostState.currentSnackbarData?.dismiss()
+                            snackbarHostState.showSnackbar(
+                                if (isHumidExpanded) "Sistema de semáforo de lluvia activo 💧" else "Alerta contraída"
+                            )
+                        }
+                    }
+                )
+
+                WaterLevelCard(
+                    waterPercent = iotData.waterLevelPercent,
+                    isExpanded = isWaterExpanded,
+                    onCardClick = {
+                        isWaterExpanded = !isWaterExpanded
+                        coroutineScope.launch {
+                            snackbarHostState.currentSnackbarData?.dismiss()
+                            snackbarHostState.showSnackbar(
+                                if (isWaterExpanded) "Indicador de agua BX5 desplegado 🌊" else "Indicador BX5 contraído"
+                            )
+                        }
+                    }
+                )
+            }
 
             Spacer(modifier = Modifier.height(16.dp))
         }
@@ -201,55 +302,207 @@ fun MainScreen(modifier: Modifier = Modifier) {
 }
 
 // ============================================================================
-// SECCIÓN DE ENCABEZADO Y REFRESH
+// BANNER SUTIL DE SIN CONEXIÓN
+// ============================================================================
+
+@Composable
+private fun OfflineBanner() {
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(16.dp))
+            .background(PastelPalette.OfflineBannerBackground)
+            .border(1.dp, PastelPalette.OfflineBannerBorder, RoundedCornerShape(16.dp))
+            .padding(14.dp)
+    ) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.Center,
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Icon(
+                imageVector = Icons.Default.Warning,
+                contentDescription = null,
+                tint = PastelPalette.TrafficRed,
+                modifier = Modifier.size(20.dp)
+            )
+            Spacer(modifier = Modifier.width(10.dp))
+            Column {
+                Text(
+                    text = "Estás sin conexión",
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = PastelPalette.TextPrimary
+                )
+                Text(
+                    text = "Mostrando los últimos datos cargados en caché local.",
+                    fontSize = 11.sp,
+                    color = PastelPalette.TextSecondary
+                )
+            }
+        }
+    }
+}
+
+// ============================================================================
+// VISTA DE ERROR AMIGABLE Y HUMANO
+// ============================================================================
+
+@Composable
+private fun FriendlyErrorView(onRetry: () -> Unit) {
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(26.dp))
+            .border(1.dp, PastelPalette.OfflineBannerBorder, RoundedCornerShape(26.dp)),
+        shape = RoundedCornerShape(26.dp),
+        colors = CardDefaults.cardColors(containerColor = PastelPalette.OfflineBannerBackground),
+        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+    ) {
+        Column(
+            modifier = Modifier.padding(24.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(64.dp)
+                    .clip(CircleShape)
+                    .background(PastelPalette.OfflineBannerBorder),
+                contentAlignment = Alignment.Center
+            ) {
+                Text(text = "📡", fontSize = 28.sp)
+            }
+
+            Spacer(modifier = Modifier.height(16.dp))
+
+            Text(
+                text = "No pudimos cargar esta información",
+                fontSize = 18.sp,
+                fontWeight = FontWeight.Bold,
+                color = PastelPalette.TextPrimary,
+                textAlign = TextAlign.Center
+            )
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            Text(
+                text = "Comprueba que tu dispositivo TendeSeguro o el módulo ESP32 tengan alimentación y conexión a la red local.",
+                fontSize = 12.sp,
+                color = PastelPalette.TextSecondary,
+                textAlign = TextAlign.Center,
+                lineHeight = 17.sp
+            )
+
+            Spacer(modifier = Modifier.height(20.dp))
+
+            Button(
+                onClick = onRetry,
+                shape = RoundedCornerShape(16.dp),
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = PastelPalette.TrafficRed,
+                    contentColor = Color.White
+                ),
+                elevation = ButtonDefaults.buttonElevation(defaultElevation = 2.dp)
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Refresh,
+                    contentDescription = null,
+                    modifier = Modifier.size(18.dp)
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(
+                    text = "Intentar de Nuevo",
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.Bold
+                )
+            }
+        }
+    }
+}
+
+// ============================================================================
+// SECCIÓN DE ENCABEZADO
 // ============================================================================
 
 @Composable
 private fun HeaderSection(
     lastUpdated: String,
+    isOffline: Boolean,
+    onToggleOffline: () -> Unit,
     onRefreshClick: () -> Unit
 ) {
-    Row(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.SpaceBetween,
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Column {
-            Text(
-                text = "TendeSeguro 2.0",
-                fontSize = 26.sp,
-                fontWeight = FontWeight.Bold,
-                color = PastelPalette.TextPrimary
-            )
-            Text(
-                text = "Monitoreo Preventivo IoT",
-                fontSize = 14.sp,
-                fontWeight = FontWeight.Medium,
-                color = PastelPalette.TextSecondary
-            )
-            Text(
-                text = "Última act: $lastUpdated",
-                fontSize = 11.sp,
-                color = PastelPalette.TextSecondary.copy(alpha = 0.8f)
-            )
+    val buttonInteractionSource = remember { MutableInteractionSource() }
+
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column {
+                Text(
+                    text = "TendeSeguro 2.0",
+                    fontSize = 26.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = PastelPalette.TextPrimary
+                )
+                Text(
+                    text = "Monitoreo Preventivo IoT",
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.Medium,
+                    color = PastelPalette.TextSecondary
+                )
+                Text(
+                    text = "Última act: $lastUpdated",
+                    fontSize = 11.sp,
+                    color = PastelPalette.TextSecondary.copy(alpha = 0.8f)
+                )
+            }
+
+            Button(
+                onClick = onRefreshClick,
+                interactionSource = buttonInteractionSource,
+                shape = RoundedCornerShape(16.dp),
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = PastelPalette.TempAccent,
+                    contentColor = Color.White
+                ),
+                elevation = ButtonDefaults.buttonElevation(defaultElevation = 2.dp),
+                modifier = Modifier.pressScaleEffect(buttonInteractionSource)
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Refresh,
+                    contentDescription = "Actualizar datos",
+                    modifier = Modifier.size(18.dp)
+                )
+                Spacer(modifier = Modifier.width(6.dp))
+                Text(text = "Actualizar", fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+            }
         }
 
-        Button(
-            onClick = onRefreshClick,
-            shape = RoundedCornerShape(16.dp),
-            colors = ButtonDefaults.buttonColors(
-                containerColor = PastelPalette.TempAccent,
-                contentColor = Color.White
-            ),
-            elevation = ButtonDefaults.buttonElevation(defaultElevation = 2.dp)
+        // Chip selector de modo Simulación Offline para pruebas
+        Row(
+            modifier = Modifier
+                .clip(RoundedCornerShape(12.dp))
+                .background(Color.White)
+                .border(1.dp, PastelPalette.TempCardBorder, RoundedCornerShape(12.dp))
+                .clickable { onToggleOffline() }
+                .padding(horizontal = 10.dp, vertical = 6.dp),
+            verticalAlignment = Alignment.CenterVertically
         ) {
-            Icon(
-                imageVector = Icons.Default.Refresh,
-                contentDescription = "Actualizar datos",
-                modifier = Modifier.size(18.dp)
+            Box(
+                modifier = Modifier
+                    .size(8.dp)
+                    .clip(CircleShape)
+                    .background(if (isOffline) PastelPalette.TrafficRed else PastelPalette.TrafficGreen)
             )
             Spacer(modifier = Modifier.width(6.dp))
-            Text(text = "Actualizar", fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+            Text(
+                text = if (isOffline) "Modo: Sin Conexión (Click para Conectar)" else "Modo: En Línea (Click para Simular Offline)",
+                fontSize = 11.sp,
+                fontWeight = FontWeight.Bold,
+                color = PastelPalette.TextSecondary
+            )
         }
     }
 }
@@ -265,12 +518,15 @@ private fun TemperatureCard(
     isExpanded: Boolean,
     onCardClick: () -> Unit
 ) {
+    val cardInteractionSource = remember { MutableInteractionSource() }
+
     Card(
         modifier = Modifier
             .fillMaxWidth()
+            .pressScaleEffect(cardInteractionSource)
             .clip(RoundedCornerShape(22.dp))
             .border(1.dp, PastelPalette.TempCardBorder, RoundedCornerShape(22.dp))
-            .clickable { onCardClick() }
+            .clickable(interactionSource = cardInteractionSource, indication = null) { onCardClick() }
             .animateContentSize(
                 animationSpec = spring(
                     dampingRatio = Spring.DampingRatioMediumBouncy,
@@ -282,7 +538,6 @@ private fun TemperatureCard(
         elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
     ) {
         Column(modifier = Modifier.padding(20.dp)) {
-            // Fila principal
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -330,7 +585,6 @@ private fun TemperatureCard(
                 }
             }
 
-            // Contenido expandido: Histórico de Temperatura
             AnimatedVisibility(
                 visible = isExpanded,
                 enter = fadeIn() + expandVertically(),
@@ -401,7 +655,8 @@ private fun HumidityCard(
     isExpanded: Boolean,
     onCardClick: () -> Unit
 ) {
-    // Determinar nivel de alerta
+    val cardInteractionSource = remember { MutableInteractionSource() }
+
     val (_, statusColor, isAlert) = when {
         humidity >= 80 -> Triple("Lluvia Inminente", PastelPalette.TrafficRed, true)
         humidity >= 65 -> Triple("Riesgo Moderado", PastelPalette.TrafficYellow, false)
@@ -416,9 +671,10 @@ private fun HumidityCard(
     Card(
         modifier = Modifier
             .fillMaxWidth()
+            .pressScaleEffect(cardInteractionSource)
             .clip(RoundedCornerShape(22.dp))
             .border(1.dp, animatedBorderColor, RoundedCornerShape(22.dp))
-            .clickable { onCardClick() }
+            .clickable(interactionSource = cardInteractionSource, indication = null) { onCardClick() }
             .animateContentSize(),
         shape = RoundedCornerShape(22.dp),
         colors = CardDefaults.cardColors(containerColor = PastelPalette.HumidCardBackground),
@@ -472,7 +728,6 @@ private fun HumidityCard(
                 }
             }
 
-            // Contenido expandido: Semáforo y Alerta
             AnimatedVisibility(
                 visible = isExpanded,
                 enter = fadeIn() + expandVertically(),
@@ -493,12 +748,10 @@ private fun HumidityCard(
                     )
                     Spacer(modifier = Modifier.height(10.dp))
 
-                    // Indicadores del Semáforo
                     TrafficLightSystem(currentHumidity = humidity)
 
                     Spacer(modifier = Modifier.height(12.dp))
 
-                    // Caja de mensaje de recomendación
                     Box(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -533,9 +786,6 @@ private fun HumidityCard(
     }
 }
 
-/**
- * Componente del Sistema de Luces de Semáforo para la Humedad
- */
 @Composable
 private fun TrafficLightSystem(currentHumidity: Int) {
     Row(
@@ -547,21 +797,18 @@ private fun TrafficLightSystem(currentHumidity: Int) {
         horizontalArrangement = Arrangement.SpaceEvenly,
         verticalAlignment = Alignment.CenterVertically
     ) {
-        // Verde (Baja / Estable < 65%)
         TrafficLightBulb(
             label = "Estable\n(<65%)",
             color = PastelPalette.TrafficGreen,
             isActive = currentHumidity < 65
         )
 
-        // Amarillo (Moderado 65-79%)
         TrafficLightBulb(
             label = "Precaución\n(65-79%)",
             color = PastelPalette.TrafficYellow,
             isActive = currentHumidity in 65..79
         )
 
-        // Rojo (Alerta Lluvia >= 80%)
         TrafficLightBulb(
             label = "Alerta Lluvia\n(≥80%)",
             color = PastelPalette.TrafficRed,
@@ -622,6 +869,8 @@ private fun WaterLevelCard(
     isExpanded: Boolean,
     onCardClick: () -> Unit
 ) {
+    val cardInteractionSource = remember { MutableInteractionSource() }
+
     val isCritical = waterPercent >= 75
     val statusLabel = if (isCritical) "Crítico" else "Normal"
     val statusColor = if (isCritical) PastelPalette.TrafficRed else PastelPalette.TrafficGreen
@@ -629,9 +878,10 @@ private fun WaterLevelCard(
     Card(
         modifier = Modifier
             .fillMaxWidth()
+            .pressScaleEffect(cardInteractionSource)
             .clip(RoundedCornerShape(22.dp))
             .border(1.dp, PastelPalette.WaterCardBorder, RoundedCornerShape(22.dp))
-            .clickable { onCardClick() }
+            .clickable(interactionSource = cardInteractionSource, indication = null) { onCardClick() }
             .animateContentSize(),
         shape = RoundedCornerShape(22.dp),
         colors = CardDefaults.cardColors(containerColor = PastelPalette.WaterCardBackground),
@@ -699,7 +949,6 @@ private fun WaterLevelCard(
                 }
             }
 
-            // Contenido expandido: Indicador de barra de nivel y estado operativo
             AnimatedVisibility(
                 visible = isExpanded,
                 enter = fadeIn() + expandVertically(),
@@ -720,7 +969,6 @@ private fun WaterLevelCard(
                     )
                     Spacer(modifier = Modifier.height(10.dp))
 
-                    // Barra de Nivel
                     Column(modifier = Modifier.fillMaxWidth()) {
                         LinearProgressIndicator(
                             progress = { waterPercent / 100f },
@@ -745,7 +993,6 @@ private fun WaterLevelCard(
 
                     Spacer(modifier = Modifier.height(14.dp))
 
-                    // Estado Operativo
                     Box(
                         modifier = Modifier
                             .fillMaxWidth()
