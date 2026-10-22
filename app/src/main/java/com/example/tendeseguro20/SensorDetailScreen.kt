@@ -16,7 +16,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
@@ -24,7 +23,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.CheckCircle
-import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
@@ -62,9 +61,10 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.tendeseguro20.ui.theme.TendeSeguro20Theme
 
 // ============================================================================
-// VISTA DE PROFUNDIDAD (DETALLES Y FORMULARIO) CON PRESERVACIÓN DE ESTADO
+// VISTA DETALLE DEL SENSOR CON RECÁLCULO DE OFFSET Y UMBRALES
 // ============================================================================
 
 @Composable
@@ -84,6 +84,8 @@ fun SensorDetailScreen(
             viewModel.clearSaveMessage()
         }
     }
+
+    val badgeColor = if (uiState.isAlertState) PastelDesignSystem.TrafficRed else PastelDesignSystem.TrafficGreen
 
     Surface(
         modifier = modifier.fillMaxSize(),
@@ -112,7 +114,7 @@ fun SensorDetailScreen(
                         vertical = PastelDesignSystem.ScreenPaddingVertical,
                     )
                     .verticalScroll(rememberScrollState())
-                    .imePadding(), // PREVENCIÓN DE SOLAPAMIENTO CON TECLADO
+                    .imePadding(),
                 verticalArrangement = Arrangement.spacedBy(PastelDesignSystem.ElementSpacingMedium),
             ) {
                 // Header con botón Atrás
@@ -148,17 +150,19 @@ fun SensorDetailScreen(
                     }
                 }
 
-                // TARJETA DE ESTADO ACTUAL
+                // TARJETA DE LECTURA AJUSTADA Y ESTADO EN TIEMPO REAL
                 Card(
                     modifier = Modifier
                         .fillMaxWidth()
                         .clip(PastelDesignSystem.ShapeHeroCard)
-                        .border(1.dp, PastelDesignSystem.TempBorder, PastelDesignSystem.ShapeHeroCard)
+                        .border(1.dp, badgeColor.copy(alpha = 0.5f), PastelDesignSystem.ShapeHeroCard)
                         .semantics(mergeDescendants = true) {
-                            contentDescription = "Estado actual del ${uiState.sensorType.displayName}: ${uiState.currentValue}. Estado operativo ${uiState.statusLabel}."
+                            contentDescription = "Lectura ajustada del ${uiState.sensorType.displayName}: ${uiState.formattedDisplayValue}. Estado: ${uiState.statusLabel}."
                         },
                     shape = PastelDesignSystem.ShapeHeroCard,
-                    colors = CardDefaults.cardColors(containerColor = PastelDesignSystem.TempBackground),
+                    colors = CardDefaults.cardColors(
+                        containerColor = if (uiState.isAlertState) PastelDesignSystem.AlertBackground else PastelDesignSystem.TempBackground,
+                    ),
                     elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
                 ) {
                     Row(
@@ -173,23 +177,26 @@ fun SensorDetailScreen(
                                 modifier = Modifier
                                     .size(52.dp)
                                     .clip(PastelDesignSystem.ShapeCircle)
-                                    .background(PastelDesignSystem.TempBorder),
+                                    .background(badgeColor.copy(alpha = 0.2f)),
                                 contentAlignment = Alignment.Center,
                             ) {
-                                Text(text = uiState.sensorType.icon, fontSize = 26.sp)
+                                Text(
+                                    text = if (uiState.isAlertState) "🚨" else uiState.sensorType.icon,
+                                    fontSize = 26.sp,
+                                )
                             }
                             Spacer(modifier = Modifier.width(14.dp))
                             Column {
                                 Text(
-                                    text = "Valor en Tiempo Real",
-                                    fontSize = 13.sp,
+                                    text = "Valor Ajustado (+Offset)",
+                                    fontSize = 12.sp,
                                     color = PastelDesignSystem.TextSecondary,
                                 )
                                 Text(
-                                    text = uiState.currentValue,
+                                    text = uiState.formattedDisplayValue,
                                     fontSize = 24.sp,
                                     fontWeight = FontWeight.ExtraBold,
-                                    color = PastelDesignSystem.TempAccent,
+                                    color = badgeColor,
                                 )
                             }
                         }
@@ -197,20 +204,20 @@ fun SensorDetailScreen(
                         Box(
                             modifier = Modifier
                                 .clip(PastelDesignSystem.ShapeBadge)
-                                .background(PastelDesignSystem.TrafficGreen.copy(alpha = 0.2f))
-                                .padding(horizontal = 10.dp, vertical = 5.dp),
+                                .background(badgeColor.copy(alpha = 0.2f))
+                                .padding(horizontal = 10.dp, vertical = 6.dp),
                         ) {
                             Text(
                                 text = uiState.statusLabel,
                                 fontSize = 11.sp,
                                 fontWeight = FontWeight.Bold,
-                                color = PastelDesignSystem.TrafficGreen,
+                                color = badgeColor,
                             )
                         }
                     }
                 }
 
-                // FORMULARIO ROBUSTO DE CONFIGURACIÓN DE UMBRALES
+                // FORMULARIO DE AJUSTE DE UMBRAL Y OFFSET
                 Text(
                     text = "Ajuste de Umbral y Calibración",
                     fontSize = 15.sp,
@@ -225,7 +232,7 @@ fun SensorDetailScreen(
                         .border(1.dp, PastelDesignSystem.TempBorder, PastelDesignSystem.ShapeSensorCard)
                         .animateContentSize(),
                     shape = PastelDesignSystem.ShapeSensorCard,
-                    colors = CardDefaults.cardColors(containerColor = Color.White),
+                    colors = CardDefaults.cardColors(containerColor = PastelDesignSystem.CardSurface),
                     elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
                 ) {
                     Column(
@@ -263,54 +270,75 @@ fun SensorDetailScreen(
 
                         HorizontalDivider(color = PastelDesignSystem.TempBorder, thickness = 1.dp)
 
-                        // Campo 1: Umbral Personalizado (Teclado Decimal)
-                        OutlinedTextField(
-                            value = uiState.customThresholdInput,
-                            onValueChange = { viewModel.updateThresholdInput(it) },
-                            label = { Text("Umbral Limite (${uiState.sensorType.unit})") },
-                            leadingIcon = { Text("⚡", fontSize = 18.sp) },
-                            singleLine = true,
-                            keyboardOptions = KeyboardOptions(
-                                keyboardType = KeyboardType.Decimal,
-                                imeAction = ImeAction.Next,
-                            ),
-                            shape = PastelDesignSystem.ShapeButton,
-                            colors = OutlinedTextFieldDefaults.colors(
-                                focusedBorderColor = PastelDesignSystem.TempAccent,
-                                unfocusedBorderColor = PastelDesignSystem.TempBorder,
-                            ),
-                            modifier = Modifier.fillMaxWidth(),
-                        )
+                        // CAMPO 1: UMBRAL LÍMITE (%)
+                        Column {
+                            OutlinedTextField(
+                                value = uiState.customThresholdInput,
+                                onValueChange = { viewModel.updateThresholdInput(it) },
+                                label = { Text("Umbral Límite (${uiState.sensorType.unit})") },
+                                leadingIcon = { Text("⚡", fontSize = 18.sp) },
+                                singleLine = true,
+                                keyboardOptions = KeyboardOptions(
+                                    keyboardType = KeyboardType.Decimal,
+                                    imeAction = ImeAction.Next,
+                                ),
+                                shape = PastelDesignSystem.ShapeButton,
+                                colors = OutlinedTextFieldDefaults.colors(
+                                    focusedBorderColor = PastelDesignSystem.TempAccent,
+                                    unfocusedBorderColor = PastelDesignSystem.TempBorder,
+                                ),
+                                modifier = Modifier.fillMaxWidth(),
+                            )
+                            Spacer(modifier = Modifier.height(4.dp))
+                            Text(
+                                text = "Define el valor crítico para activar alertas automáticas en el sistema.",
+                                fontSize = 11.sp,
+                                color = PastelDesignSystem.TextSecondary,
+                                modifier = Modifier.padding(start = 4.dp),
+                            )
+                        }
 
-                        // Campo 2: Offset de Calibración
-                        OutlinedTextField(
-                            value = uiState.calibrationOffsetInput,
-                            onValueChange = { viewModel.updateCalibrationOffsetInput(it) },
-                            label = { Text("Offset de Calibración (${uiState.sensorType.unit})") },
-                            leadingIcon = { Text("🛠️", fontSize = 18.sp) },
-                            singleLine = true,
-                            keyboardOptions = KeyboardOptions(
-                                keyboardType = KeyboardType.Decimal,
-                                imeAction = ImeAction.Done,
-                            ),
-                            keyboardActions = KeyboardActions(
-                                onDone = { focusManager.clearFocus() },
-                            ),
-                            shape = PastelDesignSystem.ShapeButton,
-                            colors = OutlinedTextFieldDefaults.colors(
-                                focusedBorderColor = PastelDesignSystem.TempAccent,
-                                unfocusedBorderColor = PastelDesignSystem.TempBorder,
-                            ),
-                            modifier = Modifier.fillMaxWidth(),
-                        )
+                        // CAMPO 2: OFFSET DE CALIBRACIÓN (%)
+                        Column {
+                            OutlinedTextField(
+                                value = uiState.calibrationOffsetInput,
+                                onValueChange = { viewModel.updateCalibrationOffsetInput(it) },
+                                label = { Text("Offset de Calibración (${uiState.sensorType.unit})") },
+                                leadingIcon = { Text("🛠️", fontSize = 18.sp) },
+                                singleLine = true,
+                                keyboardOptions = KeyboardOptions(
+                                    keyboardType = KeyboardType.Decimal,
+                                    imeAction = ImeAction.Done,
+                                ),
+                                keyboardActions = KeyboardActions(
+                                    onDone = { focusManager.clearFocus() },
+                                ),
+                                shape = PastelDesignSystem.ShapeButton,
+                                colors = OutlinedTextFieldDefaults.colors(
+                                    focusedBorderColor = PastelDesignSystem.TempAccent,
+                                    unfocusedBorderColor = PastelDesignSystem.TempBorder,
+                                ),
+                                modifier = Modifier.fillMaxWidth(),
+                            )
+                            Spacer(modifier = Modifier.height(4.dp))
+                            Text(
+                                text = "Suma o resta un valor fijo para corregir desviaciones del sensor físico.",
+                                fontSize = 11.sp,
+                                color = PastelDesignSystem.TextSecondary,
+                                modifier = Modifier.padding(start = 4.dp),
+                            )
+                        }
 
-                        Spacer(modifier = Modifier.height(4.dp))
+                        Spacer(modifier = Modifier.height(6.dp))
 
-                        // BOTÓN GUARDAR CONFIGURACIÓN
+                        // BOTÓN GUARDAR CONFIGURACIÓN (INVOCA guardarConfiguracion Y RECALCULA)
                         Button(
                             onClick = {
                                 focusManager.clearFocus()
-                                viewModel.saveConfiguration()
+                                viewModel.guardarConfiguracion(
+                                    nuevoUmbralInput = uiState.customThresholdInput,
+                                    nuevoOffsetInput = uiState.calibrationOffsetInput,
+                                )
                             },
                             shape = PastelDesignSystem.ShapeButton,
                             colors = ButtonDefaults.buttonColors(
@@ -323,7 +351,7 @@ fun SensorDetailScreen(
                                 .height(48.dp),
                         ) {
                             Icon(
-                                imageVector = Icons.Default.CheckCircle,
+                                imageVector = if (uiState.isAlertState) Icons.Default.Warning else Icons.Default.CheckCircle,
                                 contentDescription = null,
                                 modifier = Modifier.size(18.dp),
                             )
@@ -337,7 +365,7 @@ fun SensorDetailScreen(
                     }
                 }
 
-                // HISTÓRICO Y GRÁFICO RESUMIDO
+                // HISTÓRICO DE LECTURAS
                 Text(
                     text = "Tendencia de Lecturas Recientes",
                     fontSize = 15.sp,
@@ -391,5 +419,20 @@ fun SensorDetailScreen(
                 Spacer(modifier = Modifier.height(16.dp))
             }
         }
+    }
+}
+
+// ============================================================================
+// PREVIEW
+// ============================================================================
+
+@Preview(showBackground = true, showSystemUi = true)
+@Composable
+fun SensorDetailScreenPreview() {
+    TendeSeguro20Theme {
+        SensorDetailScreen(
+            viewModel = androidx.lifecycle.viewmodel.compose.viewModel(),
+            onNavigateBack = {},
+        )
     }
 }
